@@ -72,7 +72,7 @@ while True:
                 os.remove(input_path)
 
         elif file.lower().endswith((".jpg", ".jpeg")):
-            compress_image(input_path, output_path)
+            compress_image(input_path, output_path, quality)
             os.remove(input_path)
 
     time.sleep(period)
