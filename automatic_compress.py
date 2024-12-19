@@ -68,7 +68,7 @@ while True:
         if file.lower().endswith(".mp4"):
             current_bitrate = get_video_bitrate(input_path)
             if current_bitrate > 2400:
-                compress_video(input_path, output_path)
+                compress_video(input_path, output_path, video_bitrate, audio_bitrate)
                 os.remove(input_path)
 
         elif file.lower().endswith((".jpg", ".jpeg")):
