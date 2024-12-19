@@ -1,15 +1,13 @@
 
 To save space on your Android device while backing up photos and videos to Nextcloud, you can use Termux with Python and FFmpeg to automate media compression. Here’s how to set it up:
 ### 1. Requirements
-* Android phone
-* Termux app installed from F-Droid.
-* FFmpeg, a powerful media library for video and image processing.
-* Python installed in Termux.
+* Android phone (no root required)
 ### 2. Installation Steps
 * If you have termux installed, uninstall it.
-* Install Termux:boot [https://f-droid.org/en/packages/com.termux.boot/].
+* Install Termux:boot https://f-droid.org/en/packages/com.termux.boot/
+* Install Termux https://f-droid.org/en/packages/com.termux/
 ### 3. Install the script
-Update and Install Required Packages: Open Termux and run the following commands:
+Open Termux and run the following commands:
 ```
 pkg update && pkg upgrade -y
 pkg install wget -y
