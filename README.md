@@ -12,7 +12,6 @@ Open Termux and run the following commands:
 pkg update && pkg upgrade -y
 pkg install wget -y
 pkg install python ffmpeg -y
-pkg install termux-boot -y
 ```
 Clone the repository:
 ```
