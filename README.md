@@ -16,7 +16,7 @@ pkg install python ffmpeg -y
 ```
 Clone the repository:
 ```
-wget https://github.com/procrastinando/compress-media-android
+git clone https://github.com/procrastinando/compress-media-android
 mkdir -p ~/.termux/boot/
 nano ~/.termux/boot/start_compressor.sh
 ```
@@ -25,4 +25,7 @@ Add the following content:
 #!/data/data/com.termux/files/usr/bin/bash
 python ~/compress-media-android/automatic_compress.py
 ```
-Save the file and restart the phone, it should be compressing files older than 60 minutes automatically, saving them in the "Compressed" directory and the original files will be deleted.
+Save the file and restart the phone, it should be compressing files older than 60 minutes automatically, saving them in the "Compressed" directory and the original files will be deleted. To make sure the script is running:
+```
+pgrep -fl automatic_compress.py
+```
