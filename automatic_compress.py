@@ -25,28 +25,30 @@ def get_video_bitrate(file_path):
     except Exception as e:
         return 0
 
-# Function to compress video
+# Function to compress video while preserving metadata
 def compress_video(input_file, output_file, video_bitrate, audio_bitrate):
     subprocess.run([
         "ffmpeg", "-y", "-i", input_file,
+        "-map_metadata", "0",  # Copy metadata
         "-c:v", "libx265", "-b:v", f"{video_bitrate}k",
         "-c:a", "aac", "-b:a", f"{audio_bitrate}k",
         output_file
     ])
 
-# Function to compress image
+# Function to compress image while preserving metadata
 def compress_image(input_file, output_file, quality):
     subprocess.run([
         "ffmpeg", "-y", "-i", input_file,
+        "-map_metadata", "0",  # Copy metadata
         "-q:v", str(quality), output_file
     ])
 
 # User inputs
 input_dir = "/storage/emulated/0/DCIM/Camera"
 output_dir = "/storage/emulated/0/DCIM/Compressed"
-video_bitrate=2400
-audio_bitrate=128
-quality=10
+video_bitrate = 2400
+audio_bitrate = 128
+quality = 10
 period = 10
 file_age_threshold = 60
 
@@ -67,7 +69,7 @@ while True:
 
         if file.lower().endswith(".mp4"):
             current_bitrate = get_video_bitrate(input_path)
-            if current_bitrate > 2400:
+            if current_bitrate > video_bitrate:
                 compress_video(input_path, output_path, video_bitrate, audio_bitrate)
                 os.remove(input_path)
 
