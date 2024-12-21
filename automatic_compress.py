@@ -29,19 +29,46 @@ def get_video_bitrate(file_path):
 def compress_video(input_file, output_file, video_bitrate, audio_bitrate):
     subprocess.run([
         "ffmpeg", "-y", "-i", input_file,
-        "-map_metadata", "0",  # Copy metadata
-        "-c:v", "libx265", "-b:v", f"{video_bitrate}k",
-        "-c:a", "aac", "-b:a", f"{audio_bitrate}k",
+        "-map_metadata", "0",  # Copy global metadata
+        "-movflags", "use_metadata_tags",  # Ensure metadata is written in a compatible format
+        "-c:v", "libx265", "-b:v", f"{video_bitrate}k",  # Compress video
+        "-c:a", "aac", "-b:a", f"{audio_bitrate}k",  # Compress audio
+        "-tag:v", "hvc1",  # Ensure compatibility with players
         output_file
-    ])
+    ], check=True)
+def copy_metadata(input_file, output_file):
+    subprocess.run([
+        "exiftool", "-TagsFromFile", input_file,
+        "-all:all>all:all", output_file,
+        "-overwrite_original"
+    ], check=True)
+def compress_and_preserve_metadata(input_file, output_file, video_bitrate, audio_bitrate):
+    # Step 1: Compress the video
+    compress_video(input_file, output_file, video_bitrate, audio_bitrate)
+    
+    # Step 2: Copy metadata from the original to the compressed video
+    copy_metadata(input_file, output_file)
 
 # Function to compress image while preserving metadata
 def compress_image(input_file, output_file, quality):
+    # Keep the correct file extension for the temporary file
+    temp_output = f"{os.path.splitext(output_file)[0]}_temp{os.path.splitext(output_file)[1]}"
+    
+    # Use ffmpeg to compress the image
     subprocess.run([
         "ffmpeg", "-y", "-i", input_file,
-        "-map_metadata", "0",  # Copy metadata
-        "-q:v", str(quality), output_file
-    ])
+        "-q:v", str(quality), "-f", "image2", temp_output
+    ], check=True)
+    
+    # Copy all metadata from the original to the compressed file using ExifTool
+    subprocess.run([
+        "exiftool", "-TagsFromFile", input_file,
+        "-all:all>all:all", temp_output,
+        "-overwrite_original"
+    ], check=True)
+    
+    # Move the temporary file to the final output location
+    os.replace(temp_output, output_file)
 
 # User inputs
 input_dir = "/storage/emulated/0/DCIM/Camera"
@@ -70,7 +97,7 @@ while True:
         if file.lower().endswith(".mp4"):
             current_bitrate = get_video_bitrate(input_path)
             if current_bitrate > video_bitrate:
-                compress_video(input_path, output_path, video_bitrate, audio_bitrate)
+                compress_and_preserve_metadata(input_path, output_path, video_bitrate, audio_bitrate)
                 os.remove(input_path)
 
         elif file.lower().endswith((".jpg", ".jpeg")):
