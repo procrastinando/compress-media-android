@@ -6,7 +6,7 @@ To save space on your Android device while backing up photos and videos to Nextc
 * If you have termux installed, uninstall it.
 * Install Termux:boot https://f-droid.org/en/packages/com.termux.boot/
 * Install Termux https://f-droid.org/en/packages/com.termux/
-* Five storage access to termux
+* **Give storage access to termux**
 ### 3. Install the script
 Open Termux and run the following commands:
 ```
