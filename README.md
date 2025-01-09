@@ -11,20 +11,22 @@ To save space on your Android device while backing up photos and videos to Nextc
 Open Termux and run the following commands:
 ```
 pkg update && pkg upgrade -y
-pkg install wget -y
-pkg install python ffmpeg -y
+pkg install python -y
+pkg install ffmpeg -y
+pkg install exiftool -y
 ```
-Clone the repository:
+Prepare the boot script:
 ```
-git clone https://github.com/procrastinando/compress-media-android
 mkdir -p ~/.termux/boot/
 nano ~/.termux/boot/start_compressor.sh
 ```
 Add the following content:
 ```
 #!/data/data/com.termux/files/usr/bin/bash
-python ~/compress-media-android/automatic_compress.py
+python ~/automatic_compress.py
 ```
+Run `nano ~/automatic_compress.py` and add the content of the script in this repository.
+
 Save the file and restart the phone, it should be compressing files older than 60 minutes automatically, saving them in the "Compressed" directory and the original files will be deleted. To make sure the script is running:
 ```
 pgrep -fl automatic_compress.py
