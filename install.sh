@@ -3,7 +3,7 @@
 # and sets up the Termux:boot startup script.
 
 echo "Updating packages..."
-pkg update && pkg upgrade -y
+pkg update
 
 echo "Installing dependencies..."
 pkg install python ffmpeg exiftool git nano -y
