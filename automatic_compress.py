@@ -3,465 +3,435 @@ import os
 import re
 import time
 from datetime import datetime
+import traceback # Added for logging tracebacks
 
-def read_config(config_path):
-    """
-    Read configuration from the specified config file.
-    Ignores empty lines and comments.
-    """
-    config = {}
+# --- Global Log File Path ---
+LOG_FILE_PATH = ""
+
+# --- Default configuration values ---
+DEFAULT_INPUT_DIRS = ["/storage/emulated/0/DCIM/Camera"]
+DEFAULT_OUTPUT_DIR = "/storage/emulated/0/DCIM/Compressed"
+DEFAULT_VIDEO_BITRATE = 3000
+DEFAULT_AUDIO_BITRATE = 192
+DEFAULT_IMAGE_QUALITY = 7
+DEFAULT_TIME_FROM = 23.5
+DEFAULT_TIME_TO = 7.25
+DEFAULT_SLEEP_DURATION = 60
+
+def setup_logging(script_dir):
+    """Initializes the path for the log file."""
+    global LOG_FILE_PATH
+    LOG_FILE_PATH = os.path.join(script_dir, "logs.txt")
+    # First log message to confirm log file is being used
+    log_message(f"Logging initialized. Log file: {LOG_FILE_PATH}")
+
+def log_message(message):
+    """Appends a timestamped message to the log file."""
+    global LOG_FILE_PATH
+    if not LOG_FILE_PATH: # Should not happen if setup_logging is called first
+        print(f"ERROR: LOG_FILE_PATH not set. Message: {message}") # Fallback to print if logging not set up
+        return
+
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    log_entry = f"[{now_str}] {message}\n"
     try:
-        with open(config_path, 'r') as f:
-            for line in f:
-                line = line.strip()
+        with open(LOG_FILE_PATH, 'a', encoding='utf-8') as f:
+            f.write(log_entry)
+    except Exception as e:
+        # If logging fails, there's no terminal to print to.
+        # This is a critical failure of the logging mechanism itself.
+        # We can't do much other than try to print to stderr once as a last resort.
+        # Subsequent logging attempts will also fail.
+        # To strictly avoid terminal, we might have to ignore this.
+        # For now, print a single error message to stderr if this occurs.
+        if not hasattr(log_message, "logging_error_reported"):
+            print(f"CRITICAL LOGGING ERROR: Could not write to {LOG_FILE_PATH}. Error: {e}. Further log messages may be lost.", file=os.sys.stderr)
+            log_message.logging_error_reported = True # Avoid spamming stderr
+        pass # Continue execution even if logging fails
+
+def read_config_yaml(config_path):
+    config = {}
+    reading_input_dirs = False
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            for line_num, line_content in enumerate(f, 1):
+                line = line_content.strip()
                 if not line or line.startswith("#"):
                     continue
-                if "=" in line:
-                    key, value = line.split("=", 1)
+                if line.startswith("input_dir:"):
+                    config["input_dir"] = []
+                    reading_input_dirs = True
+                    _, _, value_on_line = line.partition(":")
+                    if value_on_line.strip():
+                        log_message(f"Warning in '{config_path}' (line {line_num}): 'input_dir:' should be followed by list items on new lines. Ignoring value: '{value_on_line.strip()}'")
+                    continue
+                if reading_input_dirs:
+                    if line.startswith("- "):
+                        item = line[1:].strip()
+                        if item:
+                            config["input_dir"].append(item)
+                        continue
+                    else:
+                        reading_input_dirs = False
+                if ":" in line:
+                    key, value = line.split(":", 1)
                     config[key.strip()] = value.strip()
+    except FileNotFoundError:
+        log_message(f"Info: Config file '{config_path}' not found. Default values will be used.")
+        return {}
     except Exception as e:
-        print(f"Error reading config file {config_path}: {e}")
+        log_message(f"Error reading or parsing config file '{config_path}': {e}. Default values will be used.")
+        return {}
     return config
 
 def safe_int(value, default):
-    """
-    Try to convert a value to an integer; if it fails, return the default.
-    """
     try:
         return int(value)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, AttributeError):
         return default
 
 def safe_float(value, default):
-    """
-    Try to convert a value to a float; if it fails, return the default.
-    """
     try:
         return float(value)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, AttributeError):
         return default
 
 def get_video_bitrate(file_path):
-    """
-    Use ffmpeg to retrieve the video bitrate from the file.
-    """
     try:
-        # Use ffprobe for more reliable bitrate extraction
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=bit_rate", "-of", "default=noprint_wrappers=1:nokey=1",
              file_path],
-            capture_output=True, text=True, check=True
+            capture_output=True, text=True, check=True, encoding='utf-8', errors='ignore'
         )
-        bitrate_bps = int(result.stdout.strip())
-        # Convert bits per second to kilobits per second
+        bitrate_str = result.stdout.strip()
+        if bitrate_str == "N/A":
+            log_message(f"  Info: No video bitrate found for '{os.path.basename(file_path)}' (ffprobe reported N/A). Assuming 0 kbps.")
+            return 0
+        bitrate_bps = int(bitrate_str)
         return bitrate_bps / 1000
+    except ValueError:
+        log_message(f"  Warning: ffprobe returned non-numeric bitrate for '{os.path.basename(file_path)}'. Assuming 0 kbps.")
+        return 0
     except subprocess.CalledProcessError as e:
-        # Check if the error is due to no bitrate info (e.g., image, audio-only)
-        if "N/A" in e.stderr or "bit_rate=N/A" in e.stdout:
-             print(f"No video bitrate found for {file_path}. Assuming 0.")
+        stderr_output = e.stderr.strip() if e.stderr else ""
+        stdout_output = e.stdout.strip() if e.stdout else ""
+        if "N/A" in stderr_output or "bit_rate=N/A" in stdout_output:
+             log_message(f"  Info: No video bitrate found for '{os.path.basename(file_path)}' via ffprobe error. Assuming 0 kbps.")
              return 0
-        # Check ffprobe stderr for specific bitrate parsing errors (less common)
-        stderr_output = e.stderr.lower()
-        match = re.search(r"bitrate:\s+(\d+)\s+kb/s", stderr_output) # Fallback regex on error output
-        if match:
-             print(f"Using fallback regex on ffprobe error output for {file_path}.")
-             return int(match.group(1))
+        match_error = re.search(r"bitrate:\s+(\d+)\s+kb/s", stderr_output.lower())
+        if match_error:
+             log_message(f"  Info: Using fallback regex on ffprobe error output for '{os.path.basename(file_path)}'.")
+             return int(match_error.group(1))
 
-        print(f"Error getting video bitrate for {file_path} using ffprobe: {e}")
-        print(f"ffprobe stdout: {e.stdout}")
-        print(f"ffprobe stderr: {e.stderr}")
-        # Fallback to ffmpeg method if ffprobe fails unexpectedly
+        log_message(f"  Warning: Error getting video bitrate for '{os.path.basename(file_path)}' using ffprobe: {stderr_output}")
         try:
-            print(f"Falling back to ffmpeg -i for bitrate for {file_path}")
+            log_message(f"  Info: Falling back to 'ffmpeg -i' for bitrate for '{os.path.basename(file_path)}'.")
             result_ffmpeg = subprocess.run(
                 ["ffmpeg", "-i", file_path],
-                stderr=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                text=True
+                stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True, encoding='utf-8', errors='ignore'
             )
-            # More robust regex for ffmpeg output
             match_ffmpeg = re.search(r"bitrate:\s*(\d+)\s*kb/s", result_ffmpeg.stderr, re.IGNORECASE)
-            bitrate_kbps = int(match_ffmpeg.group(1)) if match_ffmpeg else 0
-            print(f"Fallback ffmpeg bitrate found: {bitrate_kbps} kb/s")
-            return bitrate_kbps
+            if match_ffmpeg:
+                bitrate_kbps = int(match_ffmpeg.group(1))
+                log_message(f"  Info: Fallback 'ffmpeg -i' bitrate found: {bitrate_kbps} kbps.")
+                return bitrate_kbps
+            else:
+                log_message(f"  Warning: Could not find bitrate using 'ffmpeg -i' fallback for '{os.path.basename(file_path)}'. FFmpeg output: {result_ffmpeg.stderr.strip()}")
+                return 0
         except Exception as e_ffmpeg:
-            print(f"Fallback ffmpeg method also failed for {file_path}: {e_ffmpeg}")
+            log_message(f"  Error: Fallback 'ffmpeg -i' method also failed for '{os.path.basename(file_path)}': {e_ffmpeg}")
             return 0
     except FileNotFoundError:
-        print(f"Error: ffprobe command not found. Please ensure ffprobe (part of FFmpeg) is installed and in your PATH.")
-        return 0
+        log_message(f"Error: 'ffprobe' command not found. Please ensure FFmpeg is installed and in your system PATH.")
+        return -1
     except Exception as e:
-        print(f"Unexpected error getting video bitrate for {file_path}: {e}")
+        log_message(f"  Error: Unexpected error getting video bitrate for '{os.path.basename(file_path)}': {e}")
         return 0
 
-
-def compress_video(input_file, output_file, video_bitrate, audio_bitrate):
-    """
-    Compress the video while preserving metadata using ffmpeg.
-    """
+def compress_video(input_file, output_file, target_video_bitrate, target_audio_bitrate):
+    log_message(f"  Compressing video: '{os.path.basename(input_file)}' -> '{os.path.basename(output_file)}' (V:{target_video_bitrate}k, A:{target_audio_bitrate}k)")
     try:
-        print(f"Compressing video: {input_file} -> {output_file} (V:{video_bitrate}k, A:{audio_bitrate}k)")
-        subprocess.run([
+        command = [
             "ffmpeg", "-y", "-i", input_file,
-            "-map_metadata", "0",              # Copy global metadata
-            "-movflags", "+use_metadata_tags", # Correct flag syntax for writing metadata
-            "-c:v", "libx265", "-b:v", f"{video_bitrate}k",
-            "-c:a", "aac", "-b:a", f"{audio_bitrate}k",
-            "-tag:v", "hvc1",                  # Compatibility tag
-            output_file
-        ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) # Capture output for debugging
-        print(f"Successfully compressed video: {input_file}")
+            "-map_metadata", "0", "-movflags", "+use_metadata_tags",
+            "-c:v", "libx265", "-b:v", f"{target_video_bitrate}k",
+            "-c:a", "aac", "-b:a", f"{target_audio_bitrate}k",
+            "-tag:v", "hvc1", output_file
+        ]
+        result = subprocess.run(command, check=True, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+        log_message(f"  Successfully compressed video: '{os.path.basename(input_file)}'")
+        if result.stdout.strip(): log_message(f"    FFmpeg stdout: {result.stdout.strip()}")
+        if result.stderr.strip(): log_message(f"    FFmpeg stderr (info): {result.stderr.strip()}")
     except subprocess.CalledProcessError as e:
-        print(f"Error compressing video {input_file}: {e}")
-        print(f"FFmpeg stdout: {e.stdout.decode(errors='ignore')}")
-        print(f"FFmpeg stderr: {e.stderr.decode(errors='ignore')}")
-        # Attempt to clean up partially created output file on error
+        log_message(f"  Error compressing video '{os.path.basename(input_file)}':")
+        log_message(f"    FFmpeg command: {' '.join(e.cmd)}")
+        if e.stdout: log_message(f"    FFmpeg stdout: {e.stdout.strip()}")
+        if e.stderr: log_message(f"    FFmpeg stderr: {e.stderr.strip()}")
         if os.path.exists(output_file):
             try:
                 os.remove(output_file)
-                print(f"Removed incomplete output file: {output_file}")
+                log_message(f"  Removed incomplete output file: '{output_file}'")
             except OSError as remove_err:
-                print(f"Error removing incomplete output file {output_file}: {remove_err}")
-        raise # Re-raise the exception to be caught by the main loop
-    except FileNotFoundError:
-        print(f"Error: ffmpeg command not found. Please ensure ffmpeg is installed and in your PATH.")
+                log_message(f"  Error removing incomplete output file '{output_file}': {remove_err}")
         raise
-    except Exception as e:
-        print(f"Unexpected error compressing video {input_file}: {e}")
+    except FileNotFoundError:
+        log_message(f"Error: 'ffmpeg' command not found. Please ensure FFmpeg is installed and in your system PATH.")
         raise
 
-def copy_metadata(input_file, output_file):
-    """
-    Copy metadata from the input file to the output file using ExifTool.
-    Ensures the output file exists before attempting copy.
-    """
+def copy_metadata_exiftool(input_file, output_file):
     if not os.path.exists(output_file):
-        print(f"Error: Output file {output_file} does not exist. Cannot copy metadata.")
-        # Raise an error because metadata copy is expected after successful compression
-        raise FileNotFoundError(f"Output file {output_file} missing for metadata copy.")
+        log_message(f"  Error: Output file '{output_file}' does not exist. Cannot copy metadata.")
+        raise FileNotFoundError(f"Output file '{output_file}' missing for metadata copy.")
 
+    log_message(f"  Copying metadata using ExifTool: '{os.path.basename(input_file)}' -> '{os.path.basename(output_file)}'")
     try:
-        print(f"Copying metadata from {input_file} to {output_file}")
-        # Use -m to ignore minor errors, which can sometimes occur with video metadata
-        # Removed -overwrite_original as it applies to the *source* file (-TagsFromFile target)
-        # Instead, exiftool modifies the *last* file specified on the command line (output_file)
-        result = subprocess.run([
+        command = [
             "exiftool", "-m", "-TagsFromFile", input_file,
-            "-all:all>all:all", "-unsafe", # Allow writing potentially unsafe tags often found in video
-            output_file + "_original" # Backup automatically created by exiftool
-        ], check=True, capture_output=True, text=True) # Capture output
-        print(f"Successfully copied metadata for: {output_file}")
-         # Exiftool creates a backup file ending with _original. Remove it.
-        backup_file = output_file + "_original"
-        if os.path.exists(backup_file):
-            try:
-                os.remove(backup_file)
-            except OSError as e:
-                print(f"Warning: Could not remove exiftool backup file {backup_file}: {e}")
-
+            "-all:all>all:all", "-unsafe", "-overwrite_original", output_file
+        ]
+        result = subprocess.run(command, check=True, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+        log_message(f"  Successfully copied metadata for: '{os.path.basename(output_file)}'")
+        if result.stdout.strip(): log_message(f"    ExifTool stdout: {result.stdout.strip()}")
+        # Exiftool with -m might put warnings in stderr but still succeed
+        if result.stderr.strip() and "1 image files updated" not in result.stdout: # Common success message
+            log_message(f"    ExifTool stderr (info/warning): {result.stderr.strip()}")
     except subprocess.CalledProcessError as e:
-        print(f"Error copying metadata from {input_file} to {output_file} using ExifTool: {e}")
-        print(f"ExifTool stdout: {e.stdout}")
-        print(f"ExifTool stderr: {e.stderr}")
-        # Decide if this is a fatal error. Often, some metadata warnings occur.
-        # If the main goal is achieved (compression), maybe just log this.
-        # However, raising makes it clear the process wasn't perfect.
-        raise # Re-raise the exception
+        log_message(f"  Error copying metadata for '{os.path.basename(output_file)}' using ExifTool:")
+        log_message(f"    ExifTool command: {' '.join(e.cmd)}")
+        if e.stdout: log_message(f"    ExifTool stdout: {e.stdout.strip()}")
+        if e.stderr: log_message(f"    ExifTool stderr: {e.stderr.strip()}")
+        raise
     except FileNotFoundError:
-         print(f"Error: exiftool command not found. Please ensure ExifTool is installed and in your PATH.")
-         raise
-    except Exception as e:
-        print(f"Unexpected error copying metadata for {output_file}: {e}")
+        log_message(f"Error: 'exiftool' command not found. Please ensure ExifTool is installed and in your system PATH.")
         raise
 
-def compress_and_preserve_metadata(input_file, output_file, video_bitrate, audio_bitrate):
-    """
-    Compress the video and then copy the metadata.
-    Handles potential errors during compression or metadata copy.
-    """
+def process_video_file(input_file, output_file, video_bitrate_cfg, audio_bitrate_cfg):
     try:
-        compress_video(input_file, output_file, video_bitrate, audio_bitrate)
-        copy_metadata(input_file, output_file)
-        # If both succeed, remove the original input file
+        compress_video(input_file, output_file, video_bitrate_cfg, audio_bitrate_cfg)
+        copy_metadata_exiftool(input_file, output_file)
         try:
             os.remove(input_file)
-            print(f"Successfully processed and removed original: {input_file}")
+            log_message(f"  Successfully processed and removed original: '{os.path.basename(input_file)}'")
         except OSError as e:
-            print(f"Error removing original file {input_file} after processing: {e}")
-            # Don't raise here, as the main task (compression+metadata) succeeded
-
-    except Exception as e:
-        # Error logged in compress_video or copy_metadata
-        print(f"Failed to process {input_file} due to error: {e}")
-        # Do not remove input_file if any step failed
-        # Ensure potential partial output file from failed compression is removed
+            log_message(f"  Warning: Error removing original file '{input_file}' after processing: {e}")
+    except Exception: # Error already logged by sub-functions
+        log_message(f"  Failed to process video '{os.path.basename(input_file)}'. See error details above.")
         if os.path.exists(output_file):
             try:
-                # Check if the exception came from copy_metadata after successful compress_video
-                # If compress_video failed, it should have cleaned up its output already.
-                # This check is a bit redundant given compress_video's cleanup, but safe.
-                 if not isinstance(e, FileNotFoundError) or e.filename != output_file: # Avoid removing if copy_metadata failed because output didn't exist
-                    os.remove(output_file)
-                    print(f"Removed potentially incomplete output file due to error: {output_file}")
+                os.remove(output_file)
+                log_message(f"  Removed potentially incomplete output file '{output_file}' due to processing error.")
             except OSError as remove_err:
-                print(f"Error removing output file {output_file} after processing error: {remove_err}")
-        # Re-raise the exception so the main loop knows this file failed
+                log_message(f"  Error removing output file '{output_file}' after processing error: {remove_err}")
         raise
 
-def compress_image(input_file, output_file, quality):
-    """
-    Compress an image using ffmpeg and then copy its metadata using ExifTool.
-    Uses a temporary file for ffmpeg output before metadata copy.
-    """
+def process_image_file(input_file, output_file, image_quality_cfg):
     base, ext = os.path.splitext(output_file)
-    # Use a more unique temporary file name in case of concurrent runs or crashes
-    temp_output = f"{base}_temp_{os.getpid()}{ext}"
+    temp_output_image = f"{base}_temp_{os.getpid()}{ext}"
 
+    log_message(f"  Processing image: '{os.path.basename(input_file)}' -> '{os.path.basename(output_file)}' (Quality: {image_quality_cfg})")
     try:
-        print(f"Compressing image: {input_file} -> {output_file} (Quality: {quality})")
-        # Run ffmpeg to compress to temporary file
-        subprocess.run([
+        command_ffmpeg = [
             "ffmpeg", "-y", "-i", input_file,
-            "-q:v", str(quality), # Quality scale for lossy formats like JPEG
-            "-f", "image2",       # Ensure output format is image
-            temp_output
-        ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE) # Capture output
-        print(f"Successfully created temp compressed image: {temp_output}")
+            "-q:v", str(image_quality_cfg), "-f", "image2", temp_output_image
+        ]
+        result_ffmpeg = subprocess.run(command_ffmpeg, check=True, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+        log_message(f"  Successfully created temp compressed image: '{os.path.basename(temp_output_image)}'")
+        if result_ffmpeg.stdout.strip(): log_message(f"    FFmpeg stdout: {result_ffmpeg.stdout.strip()}")
+        if result_ffmpeg.stderr.strip(): log_message(f"    FFmpeg stderr (info): {result_ffmpeg.stderr.strip()}")
 
-        # Copy metadata from original to temporary file using ExifTool
-        print(f"Copying metadata from {input_file} to {temp_output}")
-        # Use -m to ignore minor errors, -overwrite_original modifies temp_output
-        result = subprocess.run([
-            "exiftool", "-m", "-TagsFromFile", input_file,
-            "-all:all>all:all", "-unsafe",
-            temp_output + "_original" # Creates backup automatically
-        ], check=True, capture_output=True, text=True)
-        print(f"Successfully copied metadata to temp file: {temp_output}")
 
-         # Remove exiftool backup
-        backup_file = temp_output + "_original"
-        if os.path.exists(backup_file):
-            try:
-                os.remove(backup_file)
-            except OSError as e:
-                 print(f"Warning: Could not remove exiftool backup file {backup_file}: {e}")
-
-        # Rename the temporary file to the final output file
-        os.replace(temp_output, output_file)
-        print(f"Successfully finalized image: {output_file}")
-
-        # If all succeeds, remove the original input file
+        copy_metadata_exiftool(input_file, temp_output_image)
+        os.replace(temp_output_image, output_file)
+        log_message(f"  Successfully finalized image: '{os.path.basename(output_file)}'")
         try:
             os.remove(input_file)
-            print(f"Successfully processed and removed original: {input_file}")
+            log_message(f"  Successfully processed and removed original: '{os.path.basename(input_file)}'")
         except OSError as e:
-            print(f"Error removing original file {input_file} after processing: {e}")
-
+            log_message(f"  Warning: Error removing original image file '{input_file}' after processing: {e}")
     except subprocess.CalledProcessError as e:
-        print(f"Error during image processing step for {input_file}: {e}")
-        print(f"Command: {' '.join(e.cmd)}")
-        print(f"Stdout: {e.stdout.decode(errors='ignore')}")
-        print(f"Stderr: {e.stderr.decode(errors='ignore')}")
-        # Clean up temporary file if it exists
-        if os.path.exists(temp_output):
-            try:
-                os.remove(temp_output)
-                print(f"Removed temporary image file: {temp_output}")
-            except OSError as remove_err:
-                print(f"Error removing temporary image file {temp_output}: {remove_err}")
-        # Re-raise the exception
+        log_message(f"  Error during image processing step for '{os.path.basename(input_file)}':")
+        log_message(f"    Command: {' '.join(e.cmd)}")
+        if e.stdout: log_message(f"    Stdout: {e.stdout.strip()}")
+        if e.stderr: log_message(f"    Stderr: {e.stderr.strip()}")
         raise
-    except FileNotFoundError as e:
-        print(f"Error: Required command not found (ffmpeg or exiftool). Please ensure they are installed and in your PATH.")
-        print(f"Missing command detail: {e}")
+    except FileNotFoundError: # Handled by sub-functions, but re-raise
+        log_message(f"  A required command was not found. Processing stopped for '{os.path.basename(input_file)}'.")
         raise
     except Exception as e:
-        print(f"Unexpected error compressing image {input_file}: {e}")
-        # Clean up temporary file if it exists
-        if os.path.exists(temp_output):
-            try:
-                os.remove(temp_output)
-                print(f"Removed temporary image file due to unexpected error: {temp_output}")
-            except OSError as remove_err:
-                print(f"Error removing temporary image file {temp_output} after error: {remove_err}")
+        log_message(f"  Unexpected error compressing image '{os.path.basename(input_file)}': {e}")
         raise
     finally:
-        # Ensure temporary exiftool backup is removed if it somehow still exists
-        backup_file = temp_output + "_original"
-        if os.path.exists(backup_file):
+        if os.path.exists(temp_output_image):
             try:
-                os.remove(backup_file)
-            except OSError as e:
-                print(f"Warning: Could not remove exiftool backup file in finally block {backup_file}: {e}")
-
+                os.remove(temp_output_image)
+                log_message(f"  Cleaned up temporary image file: '{temp_output_image}'")
+            except OSError as remove_err:
+                log_message(f"  Error removing temporary image file '{temp_output_image}' in finally block: {remove_err}")
 
 if __name__ == "__main__":
-    # Define the path for the configuration file relative to the script location.
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-    CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.txt")
+    setup_logging(SCRIPT_DIR) # Initialize logging FIRST
 
-    # --- Default configuration values ---
-    DEFAULT_INPUT_DIRS = [
-        "/storage/emulated/0/DCIM/Camera"
-        ]
-    DEFAULT_OUTPUT_DIR = "/storage/emulated/0/DCIM/Compressed"
-    DEFAULT_VIDEO_BITRATE = 3000 # kbps
-    DEFAULT_AUDIO_BITRATE = 192  # kbps
-    DEFAULT_IMAGE_QUALITY = 7    # Quality scale for ffmpeg (lower means smaller/lower quality, depends on codec)
-    DEFAULT_TIME_FROM = 23.5     # 11:30 PM
-    DEFAULT_TIME_TO = 7.25       # 7:15 AM
+    CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.yaml")
 
-    print("Script started. Press Ctrl+C to stop.")
-    print(f"Using config file: {CONFIG_PATH}")
+    log_message("Script started.")
+    log_message(f"Using config file: {CONFIG_PATH}")
+
+    ffprobe_found = True
+    ffmpeg_found = True
+    exiftool_found = True
 
     while True:
         try:
-            config = read_config(CONFIG_PATH)
+            raw_config = read_config_yaml(CONFIG_PATH)
+            input_dirs   = raw_config.get("input_dir", DEFAULT_INPUT_DIRS)
+            if not isinstance(input_dirs, list) or not input_dirs:
+                if "input_dir" in raw_config:
+                    log_message(f"Warning: 'input_dir' in config was not a valid list or was empty. Using default: {DEFAULT_INPUT_DIRS}")
+                input_dirs = DEFAULT_INPUT_DIRS
+            output_dir   = raw_config.get("output_dir", DEFAULT_OUTPUT_DIR)
+            video_bitrate_target = safe_int(raw_config.get("video_bitrate"), DEFAULT_VIDEO_BITRATE)
+            audio_bitrate_target = safe_int(raw_config.get("audio_bitrate"), DEFAULT_AUDIO_BITRATE)
+            image_quality_cfg    = safe_int(raw_config.get("quality"), DEFAULT_IMAGE_QUALITY)
+            time_from_cfg        = safe_float(raw_config.get("time_from"), DEFAULT_TIME_FROM)
+            time_to_cfg          = safe_float(raw_config.get("time_to"), DEFAULT_TIME_TO)
+            sleep_duration_cfg   = safe_int(raw_config.get("sleep_duration"), DEFAULT_SLEEP_DURATION)
 
-            # --- Retrieve and safely convert configuration values ---
-
-            # Handle input directories (expects comma-separated string in config)
-            input_dirs_str = config.get("input_dirs") # Read as string first
-            if input_dirs_str:
-                # Split by comma, strip whitespace from each path, filter out empty strings
-                input_dirs = [d.strip() for d in input_dirs_str.split(',') if d.strip()]
-                if not input_dirs: # Handle case where config line is like "input_dirs="
-                    print("Warning: 'input_dirs' key found in config but value is empty or only whitespace. Using default.")
-                    input_dirs = DEFAULT_INPUT_DIRS
-            else:
-                 # Use default if key is not in config file
-                 input_dirs = DEFAULT_INPUT_DIRS
-
-            output_dir   = config.get("output_dir", DEFAULT_OUTPUT_DIR)
-            # Use descriptive names matching config keys where possible
-            video_bitrate_target = safe_int(config.get("video_bitrate_target"), DEFAULT_VIDEO_BITRATE)
-            audio_bitrate_target = safe_int(config.get("audio_bitrate_target"), DEFAULT_AUDIO_BITRATE)
-            image_quality        = safe_int(config.get("image_quality"), DEFAULT_IMAGE_QUALITY)
-            time_from            = safe_float(config.get("time_from"), DEFAULT_TIME_FROM)
-            time_to              = safe_float(config.get("time_to"), DEFAULT_TIME_TO)
-
-            # --- Prepare output directory ---
             try:
                 os.makedirs(output_dir, exist_ok=True)
             except OSError as e:
-                print(f"Error: Could not create output directory {output_dir}: {e}. Exiting loop iteration.")
-                time.sleep(60)
-                continue # Skip the rest of this iteration
+                log_message(f"Error: Could not create output directory '{output_dir}': {e}. Skipping this cycle.")
+                time.sleep(sleep_duration_cfg)
+                continue
 
-            # --- Check time window ---
             now = datetime.now()
-            current_hour_float = now.hour + now.minute / 60.0 + now.second / 3600.0
+            current_hour_float = now.hour + now.minute / 60.0
+            if time_from_cfg < time_to_cfg:
+                is_time_allowed = time_from_cfg <= current_hour_float < time_to_cfg
+            else:
+                is_time_allowed = current_hour_float >= time_from_cfg or current_hour_float < time_to_cfg
 
-            # Determine if the current time is within the allowed conversion window.
-            # Handles overnight window (e.g., from 23:00 to 07:00)
-            if time_from < time_to: # Normal window (e.g., 9.0 to 17.0)
-                allowed = time_from <= current_hour_float < time_to
-            else: # Overnight window (e.g., 23.0 to 7.0)
-                allowed = current_hour_float >= time_from or current_hour_float < time_to
-
-            if allowed:
-                print(f"{now.strftime('%Y-%m-%d %H:%M:%S')} - Within allowed time window ({time_from:.2f} - {time_to:.2f}). Checking for files...")
-
-                # --- Iterate through each configured input directory ---
+            if is_time_allowed:
+                log_message(f"Within allowed time window ({time_from_cfg:.2f} - {time_to_cfg:.2f}). Checking for files...")
                 files_processed_this_cycle = 0
+
+                # Check for tool existence once per cycle if not found previously
+                if not ffmpeg_found and not os.path.exists(os.path.join(SCRIPT_DIR, ".ffmpeg_checked")):
+                    try: subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+                    except FileNotFoundError: log_message("CRITICAL: ffmpeg command not found globally. Processing requiring ffmpeg will fail.")
+                    except subprocess.CalledProcessError: ffmpeg_found = True # Found but version call failed, assume ok
+                    else: ffmpeg_found = True
+                    open(os.path.join(SCRIPT_DIR, ".ffmpeg_checked"), 'a').close() # Mark as checked
+
+                if not exiftool_found and not os.path.exists(os.path.join(SCRIPT_DIR, ".exiftool_checked")):
+                    try: subprocess.run(["exiftool", "-ver"], capture_output=True, check=True)
+                    except FileNotFoundError: log_message("CRITICAL: exiftool command not found globally. Processing requiring exiftool will fail.")
+                    except subprocess.CalledProcessError: exiftool_found = True # Found but version call failed, assume ok
+                    else: exiftool_found = True
+                    open(os.path.join(SCRIPT_DIR, ".exiftool_checked"), 'a').close() # Mark as checked
+
+
                 for current_input_dir in input_dirs:
-                    # Check if the input directory exists and is actually a directory
                     if not os.path.isdir(current_input_dir):
-                        print(f"Warning: Input directory not found or not a directory: {current_input_dir}. Skipping.")
-                        continue # Skip to the next directory in the list
-
-                    print(f"Scanning directory: {current_input_dir}")
-
-                    # --- Iterate through files in the current input directory ---
+                        log_message(f"Warning: Input directory not found or not a directory: '{current_input_dir}'. Skipping.")
+                        continue
+                    
+                    log_message(f"Scanning directory: '{current_input_dir}'")
                     try:
-                        files_in_dir = os.listdir(current_input_dir)
+                        filenames_in_dir = os.listdir(current_input_dir)
                     except OSError as e:
-                        print(f"Error listing files in directory {current_input_dir}: {e}. Skipping directory.")
+                        log_message(f"Error listing files in '{current_input_dir}': {e}. Skipping directory.")
                         continue
 
-                    for filename in files_in_dir:
-                        # Ignore hidden files/folders
+                    for filename in filenames_in_dir:
                         if filename.startswith("."):
                             continue
-
                         input_path = os.path.join(current_input_dir, filename)
-                        # Place all output files directly into the single output_dir
-                        # Potential for name collisions if files with the same name exist in different input dirs.
-                        # Consider adding subdirectory structure to output if this is a concern.
                         output_path = os.path.join(output_dir, filename)
-
-                        # Check if it's a file (and not a directory)
                         if not os.path.isfile(input_path):
                             continue
-
-                        # Check if the output file already exists (avoids reprocessing/errors)
                         if os.path.exists(output_path):
-                            # print(f"Skipping {filename}: Output file already exists at {output_path}")
-                            continue # Skip this file, already processed or manually placed
-
+                            continue
+                        
                         lower_filename = filename.lower()
+                        file_processed_successfully = False
 
-                        # --- Process MP4 videos ---
-                        if lower_filename.endswith(".mp4"):
-                            print(f"Found video: {filename}")
-                            current_bitrate_kbps = get_video_bitrate(input_path)
-                            print(f"  - Current bitrate: {current_bitrate_kbps:.2f} kbps (Target: {video_bitrate_target} kbps)")
-                            # Only compress if current bitrate is significantly higher (e.g., > 10% higher) to avoid recompressing already compressed files
-                            # Or if bitrate couldn't be determined (returns 0)
-                            if current_bitrate_kbps == 0 or current_bitrate_kbps > video_bitrate_target * 1.1:
-                                try:
-                                    compress_and_preserve_metadata(input_path, output_path, video_bitrate_target, audio_bitrate_target)
-                                    files_processed_this_cycle += 1
-                                    # Input file is removed by compress_and_preserve_metadata on success
-                                except Exception as e:
-                                    print(f"Failed to process video {input_path}. Error logged above. File not removed.")
-                                    # Error is already logged inside the function
-                            else:
-                                print(f"  - Skipping compression for {filename}: Bitrate ({current_bitrate_kbps:.2f}k) is not significantly higher than target ({video_bitrate_target}k).")
-                                # Decide whether to move the file anyway or leave it. Let's move it without compression.
-                                try:
-                                    print(f"  - Moving file {filename} to output directory without compression.")
-                                    os.rename(input_path, output_path)
-                                except OSError as e:
-                                     print(f"  - Error moving file {input_path} to {output_path}: {e}")
+                        try:
+                            if lower_filename.endswith(".mp4"):
+                                log_message(f"Found video: '{filename}'")
+                                if not ffmpeg_found : # Relies on ffprobe also being part of ffmpeg installation
+                                     log_message(f"  Skipping video '{filename}', ffmpeg/ffprobe not found.")
+                                     continue
 
+                                current_br_kbps = get_video_bitrate(input_path)
+                                if current_br_kbps == -1: # ffprobe not found error
+                                    ffprobe_found = False # Mark specifically ffprobe as not found
+                                    ffmpeg_found = False # If ffprobe not found, ffmpeg likely has issues or isn't fully installed
+                                    continue
 
-                        # --- Process JPG/JPEG images ---
-                        elif lower_filename.endswith((".jpg", ".jpeg")):
-                            print(f"Found image: {filename}")
-                            try:
-                                compress_image(input_path, output_path, image_quality)
+                                log_message(f"  - Current bitrate: {current_br_kbps:.2f} kbps (Target: {video_bitrate_target} kbps)")
+                                if current_br_kbps == 0 or current_br_kbps > (video_bitrate_target * 1.1):
+                                    if not exiftool_found:
+                                        log_message(f"  Skipping metadata copy for '{filename}' if compression succeeds, ExifTool not found.")
+                                    process_video_file(input_path, output_path, video_bitrate_target, audio_bitrate_target)
+                                    file_processed_successfully = True
+                                else:
+                                    log_message(f"  - Skipping compression for '{filename}': Bitrate OK.")
+                                    log_message(f"  - Moving file '{filename}' to output directory without compression.")
+                                    try:
+                                        os.rename(input_path, output_path)
+                                        file_processed_successfully = True
+                                    except OSError as e:
+                                        log_message(f"  - Error moving file '{input_path}' to '{output_path}': {e}")
+                            
+                            elif lower_filename.endswith((".jpg", ".jpeg")):
+                                log_message(f"Found image: '{filename}'")
+                                if not ffmpeg_found :
+                                     log_message(f"  Skipping image '{filename}', ffmpeg not found.")
+                                     continue
+                                if not exiftool_found:
+                                     log_message(f"  Skipping metadata copy for '{filename}' if compression succeeds, ExifTool not found.")
+                                process_image_file(input_path, output_path, image_quality_cfg)
+                                file_processed_successfully = True
+
+                            if file_processed_successfully:
                                 files_processed_this_cycle += 1
-                                # Input file is removed by compress_image on success
-                            except Exception as e:
-                                print(f"Failed to process image {input_path}. Error logged above. File not removed.")
-                                # Error is already logged inside the function
 
-                        # Add more file types here if needed (e.g., .png, .mov)
+                        except FileNotFoundError as tool_fnf_error:
+                            # This primarily catches if ffmpeg/exiftool is not found during their direct calls
+                            # The get_video_bitrate has its own FileNotFoundError for ffprobe
+                            tool_name = "Unknown tool"
+                            if "ffmpeg" in str(tool_fnf_error).lower() or (hasattr(tool_fnf_error, 'filename') and "ffmpeg" in tool_fnf_error.filename):
+                                tool_name = "ffmpeg"
+                                ffmpeg_found = False
+                            elif "exiftool" in str(tool_fnf_error).lower() or (hasattr(tool_fnf_error, 'filename') and "exiftool" in tool_fnf_error.filename):
+                                tool_name = "exiftool"
+                                exiftool_found = False
+                            log_message(f"Error: '{tool_name}' command not found during processing of '{filename}'. Ensure it's installed and in PATH.")
+                        except Exception as e_file_proc:
+                            log_message(f"An error occurred processing '{filename}'. It was not removed. Error: {e_file_proc}")
+                            log_message(traceback.format_exc())
+
 
                 if files_processed_this_cycle > 0:
-                     print(f"Finished processing cycle. {files_processed_this_cycle} file(s) processed.")
+                    log_message(f"Finished processing cycle. {files_processed_this_cycle} file(s) processed.")
                 else:
-                     print("No new files to process in allowed directories.")
-
+                    log_message("No new files to process in allowed directories during this cycle.")
             else:
-                print(f"{now.strftime('%Y-%m-%d %H:%M:%S')} - Current time is outside the allowed window ({time_from:.2f} - {time_to:.2f}). Waiting...")
+                log_message(f"Current time is outside the allowed window ({time_from_cfg:.2f} - {time_to_cfg:.2f}). Waiting...")
 
-            # --- Wait before the next check ---
-            sleep_duration = 60 # seconds
-            print(f"Sleeping for {sleep_duration} seconds...")
-            time.sleep(sleep_duration)
+            log_message(f"Sleeping for {sleep_duration_cfg} seconds...")
+            time.sleep(sleep_duration_cfg)
 
         except KeyboardInterrupt:
-            print("\nScript interrupted by user. Exiting.")
+            log_message("\nScript interrupted by user. Exiting.")
             break
-        except Exception as e:
-            # Catch unexpected errors in the main loop
-            print(f"\n--- UNEXPECTED ERROR IN MAIN LOOP ---")
-            print(f"Error: {e}")
-            import traceback
-            traceback.print_exc()
-            print("-------------------------------------")
-            print("Continuing loop after 60 seconds...")
-            time.sleep(60)
+        except Exception as e_main_loop:
+            log_message(f"\n--- UNEXPECTED ERROR IN MAIN SCRIPT LOOP ---")
+            log_message(f"Error: {e_main_loop}")
+            log_message("Traceback:")
+            log_message(traceback.format_exc()) # Log the full traceback
+            log_message("-------------------------------------")
+            log_message(f"Continuing loop after {DEFAULT_SLEEP_DURATION} seconds emergency sleep...")
+            time.sleep(DEFAULT_SLEEP_DURATION)
