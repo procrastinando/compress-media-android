@@ -8,7 +8,7 @@ Compress Media Android is a simple solution to help you save storage on your pho
 * Install Termux:boot https://f-droid.org/en/packages/com.termux.boot/
 * Install Termux https://f-droid.org/en/packages/com.termux/
 * **Give storage access to termux**
-### 3. Install the script
+### 3. Install/update the script
 Open Termux and run the following command:
 ```
 curl -L https://raw.githubusercontent.com/procrastinando/compress-media-android/master/install.sh | bash
