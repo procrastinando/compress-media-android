@@ -30,7 +30,8 @@ EOF
 
 chmod +x "$BOOT_SCRIPT"
 
+echo "--------------------------------------"
 echo "Installation complete."
 echo "Please ensure that Termux and Termux:boot are installed and have the necessary permissions."
 echo "Your media compressor will run after rebooting your android."
-echo "Modify the file ~/compress-media-android/config.txt to set your own settings."
+echo "Modify the file ~/compress-media-android/config.yaml to set your own settings."
