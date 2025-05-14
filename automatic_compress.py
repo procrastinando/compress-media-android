@@ -16,7 +16,7 @@ DEFAULT_AUDIO_BITRATE = 192
 DEFAULT_IMAGE_QUALITY = 7
 DEFAULT_TIME_FROM = 23.5
 DEFAULT_TIME_TO = 7.25
-DEFAULT_SLEEP_DURATION = 300 # Increased default sleep to 5 minutes
+DEFAULT_SLEEP_DURATION = 300
 
 # --- Status constants for file processing ---
 STATUS_COMPLETED = "Completed"

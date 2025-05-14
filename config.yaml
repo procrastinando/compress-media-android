@@ -24,4 +24,4 @@ time_from: 23.5
 time_to: 7.25
 
 # How long to sleep (in seconds) between checking for new files.
-sleep_duration: 60
+sleep_duration: 300
