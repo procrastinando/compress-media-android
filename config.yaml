@@ -1,8 +1,42 @@
+# # Add more paths by uncommenting and adding new lines starting with '- '.
+# input_dir:
+#   - /storage/emulated/0/DCIM/Camera
+#   # - /path/to/another/camera/folder
+#   # - /path/to/your/videos
+
+# # Directory where compressed files will be saved.
+# output_dir: /storage/emulated/0/DCIM/Compressed
+
+# # Target video bitrate in kbps (kilobits per second).
+# # Videos with bitrate higher than this (plus a small margin) will be compressed.
+# video_bitrate: 3000
+
+# # Target audio bitrate for videos in kbps.
+# audio_bitrate: 192
+
+# # Image compression quality for JPEG.
+# # to 31 (lowest quality, smaller file).
+# quality: 7
+
+# # Allowed time window for compression (24-hour format using fractional hours).
+# # Example: 23.5 means 11:30 PM, 7.25 means 7:15 AM.
+# time_from: 23.5
+# time_to: 7.25
+
+# # How long to sleep (in seconds) between checking for new files.
+# sleep_duration: 300
+
+
 # Add more paths by uncommenting and adding new lines starting with '- '.
 input_dir:
   - /storage/emulated/0/DCIM/Camera
   # - /path/to/another/camera/folder
   # - /path/to/your/videos
+
+# Delete original files after successful processing.
+# 'yes': Original file is deleted from the input directory.
+# 'no': Original file is kept in the input directory.
+delete_original: yes
 
 # Directory where compressed files will be saved.
 output_dir: /storage/emulated/0/DCIM/Compressed
@@ -14,8 +48,13 @@ video_bitrate: 3000
 # Target audio bitrate for videos in kbps.
 audio_bitrate: 192
 
+# Use a two-pass encoding method for videos for potentially better quality at the target bitrate.
+# 'yes': Slower but higher quality. This can take 3-5x longer and use more battery.
+# 'no': Faster, standard one-pass encoding. Recommended for most devices.
+two_pass_encoding: yes
+
 # Image compression quality for JPEG.
-# to 31 (lowest quality, smaller file).
+# A value from 2 (highest quality, larger file) to 31 (lowest quality, smaller file).
 quality: 7
 
 # Allowed time window for compression (24-hour format using fractional hours).
