@@ -78,7 +78,7 @@ The script will automatically apply your new settings on its next cycle (within 
     (Press `Ctrl+C` to stop viewing the log).
 
 ## 6. Uninstall
-To completely remove the script and its startup configuration, run the provided uninstall script:
+To completely remove the script and its startup configuration, run the provided uninstall script from your home directory:
 ```bash
 ~/compress-media-android/uninstall.sh
 ```
