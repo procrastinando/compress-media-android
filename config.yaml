@@ -1,37 +1,64 @@
+# -----------------------------------------------------------------------------
+# Configuration for the Media Compression Script
+# -----------------------------------------------------------------------------
+# This file lets you customize how the script behaves.
+# Lines starting with '#' are comments and are ignored.
+
+# Input directories to scan for new photos and videos.
 # Add more paths by uncommenting and adding new lines starting with '- '.
 input_dir:
   - /storage/emulated/0/DCIM/Camera
   # - /path/to/another/camera/folder
   # - /path/to/your/videos
 
-# Delete original files after successful processing.
-# 'yes': Original file is deleted from the input directory.
-# 'no': Original file is kept in the input directory.
-delete_original: yes
-
 # Directory where compressed files will be saved.
 output_dir: /storage/emulated/0/DCIM/Compressed
 
+# --- Processing Options ---
+
+# Delete original files after successful processing.
+# 'yes': Original file is deleted from the input directory. (Saves space)
+# 'no': Original file is kept in the input directory. (Safer for testing)
+delete_original: yes
+
+# --- Video Settings ---
+
+# The video codec to use for compression.
+# 'h265': (Default) Excellent compression and fast encoding. Widely compatible.
+# 'av1':  Superior compression (smaller files for same quality), but EXTREMELY slow to encode.
+#         Only use 'av1' if you have a very powerful CPU and are not concerned about long processing times.
+video_codec: h265
+
 # Target video bitrate in kbps (kilobits per second).
-# Videos with bitrate higher than this (plus a small margin) will be compressed.
+# Videos with a bitrate higher than this (plus a small margin) will be compressed.
+# A lower value means smaller file size but potentially lower quality.
+# Tip: For 'av1', you can often set this 20-30% lower than 'h265' for similar quality.
 video_bitrate: 3000
 
 # Target audio bitrate for videos in kbps.
 audio_bitrate: 192
 
 # Use a two-pass encoding method for videos for potentially better quality at the target bitrate.
-# 'yes': Slower but higher quality. This can take 3-5x longer and use more battery.
-# 'no': Faster, standard one-pass encoding. Recommended for most devices.
+# 'yes': Slower but often results in better quality for a given file size.
+# 'no': Faster, standard one-pass encoding.
 two_pass_encoding: yes
 
-# Image compression quality for JPEG.
+# --- Image Settings ---
+
+# Image compression quality for JPEG files.
+# This is an FFMpeg setting where a lower value is HIGHER quality.
 # A value from 2 (highest quality, larger file) to 31 (lowest quality, smaller file).
+# A value of 5-8 is a good balance for saving space without noticeable quality loss.
 quality: 7
 
+# --- Scheduling Options ---
+
 # Allowed time window for compression (24-hour format using fractional hours).
-# Example: 23.5 means 11:30 PM, 7.25 means 7:15 AM.
+# The script will only run if the current time is between 'time_from' and 'time_to'.
+# This is useful for running the script only at night or during off-peak hours.
+# Example: 23.5 means 11:30 PM, 7.25 means 7:15 AM. This will run overnight.
 time_from: 23.5
 time_to: 7.25
 
-# How long to sleep (in seconds) between checking for new files.
+# How long to sleep (in seconds) between checking for new files in the input directories.
 sleep_duration: 300
