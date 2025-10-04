@@ -40,6 +40,7 @@ The script will automatically apply your new settings on its next cycle (within 
 *   `time_from` / `time_to`: The time window during which the script is allowed to run.
 *   `sleep_duration`: How long the script waits between checking for files.
 *   `delete_original`: Set to `yes` to delete original files after processing, or `no` to keep them.
+*   `video_codec`: Only use `av1` if you have a very powerful CPU and are not concerned about long processing times.
 *   `two_pass_encoding`: Set to `yes` for higher quality video compression at the cost of much longer processing time and battery usage.
 
 ## 5. Verifying and Monitoring
