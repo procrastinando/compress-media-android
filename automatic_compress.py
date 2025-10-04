@@ -21,6 +21,7 @@ DEFAULT_TIME_TO = 7.25
 DEFAULT_SLEEP_DURATION = 300
 DEFAULT_DELETE_ORIGINAL = "yes"
 DEFAULT_TWO_PASS_ENCODING = "yes"
+DEFAULT_VIDEO_CODEC = "h265" # New: Default codec
 
 # --- Status constants for file processing ---
 STATUS_COMPLETED = "Completed"
@@ -137,10 +138,22 @@ def cleanup_pass_logs():
         except OSError:
             pass
 
-def process_video_file(input_file, output_file, video_b_cfg, audio_b_cfg, current_bitrate_kbps, two_pass_cfg, delete_original_cfg):
-    """Processes a video file. Returns (STATUS_STRING, error_message_or_None)."""
+def process_video_file(input_file, output_file, video_b_cfg, audio_b_cfg, current_bitrate_kbps, two_pass_cfg, delete_original_cfg, video_codec_cfg):
+    """Processes a video file using the specified codec. Returns (STATUS_STRING, error_message_or_None)."""
     filename = os.path.basename(input_file)
     should_compress = current_bitrate_kbps == 0 or current_bitrate_kbps > (video_b_cfg * 1.1)
+
+    # --- New: Set codec-specific FFmpeg parameters ---
+    if video_codec_cfg == "av1":
+        ffmpeg_codec = "libaom-av1"
+        # Using -cpu-used makes AV1 encoding much faster at a slight quality/efficiency cost.
+        extra_pass_args = ["-cpu-used", "8"]
+        extra_final_args = []
+    else: # Default to h265
+        ffmpeg_codec = "libx265"
+        extra_pass_args = []
+        # hvc1 tag is for broader compatibility, especially with Apple devices
+        extra_final_args = ["-tag:v", "hvc1"]
 
     if should_compress:
         try:
@@ -148,21 +161,24 @@ def process_video_file(input_file, output_file, video_b_cfg, audio_b_cfg, curren
                 # --- Two-Pass Encoding ---
                 pass1_cmd = [
                     "ffmpeg", "-y", "-i", input_file,
-                    "-c:v", "libx265", "-b:v", f"{video_b_cfg}k",
+                    "-c:v", ffmpeg_codec, "-b:v", f"{video_b_cfg}k",
+                    *extra_pass_args,
                     "-pass", "1", "-an", "-f", "null", "/dev/null"
                 ]
-                if not _run_command(pass1_cmd, "Video compression (Pass 1)", filename):
+                if not _run_command(pass1_cmd, f"Video compression ({ffmpeg_codec} Pass 1)", filename):
                     return STATUS_FAILED, "Compression error (Pass 1)"
 
                 pass2_cmd = [
                     "ffmpeg", "-i", input_file,
                     "-map_metadata", "0", "-movflags", "+use_metadata_tags",
-                    "-c:v", "libx265", "-b:v", f"{video_b_cfg}k",
+                    "-c:v", ffmpeg_codec, "-b:v", f"{video_b_cfg}k",
+                    *extra_pass_args,
                     "-pass", "2",
                     "-c:a", "aac", "-b:a", f"{audio_b_cfg}k",
-                    "-tag:v", "hvc1", output_file
+                    *extra_final_args,
+                    output_file
                 ]
-                if not _run_command(pass2_cmd, "Video compression (Pass 2)", filename):
+                if not _run_command(pass2_cmd, f"Video compression ({ffmpeg_codec} Pass 2)", filename):
                     if os.path.exists(output_file): os.remove(output_file)
                     return STATUS_FAILED, "Compression error (Pass 2)"
             else:
@@ -170,11 +186,13 @@ def process_video_file(input_file, output_file, video_b_cfg, audio_b_cfg, curren
                 ffmpeg_cmd = [
                     "ffmpeg", "-y", "-i", input_file,
                     "-map_metadata", "0", "-movflags", "+use_metadata_tags",
-                    "-c:v", "libx265", "-b:v", f"{video_b_cfg}k",
+                    "-c:v", ffmpeg_codec, "-b:v", f"{video_b_cfg}k",
+                    *extra_pass_args, # Also add to one-pass for consistency
                     "-c:a", "aac", "-b:a", f"{audio_b_cfg}k",
-                    "-tag:v", "hvc1", output_file
+                    *extra_final_args,
+                    output_file
                 ]
-                if not _run_command(ffmpeg_cmd, "Video compression", filename):
+                if not _run_command(ffmpeg_cmd, f"Video compression ({ffmpeg_codec})", filename):
                     if os.path.exists(output_file): os.remove(output_file)
                     return STATUS_FAILED, "Compression error"
         finally:
@@ -266,6 +284,14 @@ if __name__ == "__main__":
             sleep_duration_cfg = safe_int(raw_config.get("sleep_duration"), DEFAULT_SLEEP_DURATION)
             delete_original_cfg = raw_config.get("delete_original", DEFAULT_DELETE_ORIGINAL).lower() == 'yes'
             two_pass_cfg = raw_config.get("two_pass_encoding", DEFAULT_TWO_PASS_ENCODING).lower() == 'yes'
+            
+            # --- New: Read video_codec from config ---
+            video_codec_cfg = raw_config.get("video_codec", DEFAULT_VIDEO_CODEC).lower()
+            if video_codec_cfg not in ["h265", "av1"]:
+                log_message(f"Warning: Invalid video_codec '{video_codec_cfg}' in config. Falling back to '{DEFAULT_VIDEO_CODEC}'.")
+                video_codec_cfg = DEFAULT_VIDEO_CODEC
+            log_message(f"Using video codec: {video_codec_cfg}")
+
 
             # --- Check Time Window ---
             now = datetime.now()
@@ -339,7 +365,8 @@ if __name__ == "__main__":
                                 elif hasattr(_run_command, "exiftool_missing_reported") and _run_command.exiftool_missing_reported:
                                     status, error_msg = STATUS_FAILED, "exiftool missing"
                                 else:
-                                    status, error_msg = process_video_file(input_path, output_path, video_b_cfg, audio_b_cfg, current_br_kbps, two_pass_cfg, delete_original_cfg)
+                                    # --- Pass the selected codec to the function ---
+                                    status, error_msg = process_video_file(input_path, output_path, video_b_cfg, audio_b_cfg, current_br_kbps, two_pass_cfg, delete_original_cfg, video_codec_cfg)
 
                         elif lower_filename.endswith((".jpg", ".jpeg")):
                             if hasattr(_run_command, "ffmpeg_missing_reported") and _run_command.ffmpeg_missing_reported:
