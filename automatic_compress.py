@@ -232,7 +232,9 @@ def process_image_file(input_file, output_file, quality_cfg, delete_original_cfg
     base, ext = os.path.splitext(output_file)
     temp_output_image = f"{base}_temp_{os.getpid()}{ext}"
 
-    ffmpeg_cmd = [ "ffmpeg", "-y", "-i", input_file, "-q:v", str(quality_cfg), "-f", "image2", temp_output_image ]
+    # BUG FIX: Added -noautorotate to prevent ffmpeg from applying rotation.
+    # The rotation metadata will be handled correctly by exiftool later.
+    ffmpeg_cmd = [ "ffmpeg", "-y", "-noautorotate", "-i", input_file, "-q:v", str(quality_cfg), "-f", "image2", temp_output_image ]
     if not _run_command(ffmpeg_cmd, "Image compression", filename):
         if os.path.exists(temp_output_image): os.remove(temp_output_image)
         return STATUS_FAILED, "Compression error"
