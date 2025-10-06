@@ -201,7 +201,6 @@ def process_image_file(input_file, output_file, quality_cfg, delete_original_cfg
     base, ext = os.path.splitext(output_file)
     temp_output_image = f"{base}_temp_{os.getpid()}{ext}"
 
-    # BUG FIX: -noautorotate prevents FFmpeg from incorrectly rotating the image.
     if image_format_cfg == "avif":
         ffmpeg_cmd = ["ffmpeg", "-y", "-noautorotate", "-i", input_file, "-c:v", "libaom-av1", "-crf", str(quality_cfg), "-cpu-used", "4", temp_output_image]
     else: # Default to JPG
@@ -272,6 +271,7 @@ if __name__ == "__main__":
 
             now = datetime.now()
             current_hour_float = now.hour + now.minute / 60.0
+            # BUG FIX: The 'else' clause has been restored to this line
             is_time_allowed = (time_from_cfg <= current_hour_float < time_to_cfg) if time_from_cfg < time_to_cfg \
                               else (current_hour_float >= time_from_cfg or current_hour_float < time_to_cfg)
 
@@ -316,7 +316,6 @@ if __name__ == "__main__":
                         status, error_msg = STATUS_FAILED, "Unknown processing error"
                         lower_filename = filename.lower()
                         
-                        # --- BUG FIX: Determine output path and check for existence BEFORE processing ---
                         output_filename = filename
                         if lower_filename.endswith((".jpg", ".jpeg")):
                             base, _ = os.path.splitext(filename)
@@ -332,9 +331,8 @@ if __name__ == "__main__":
                                 except OSError as e:
                                     log_message(f"  Warning: Could not remove original '{filename}' (output exists): {e}")
                             processed_count += 1
-                            continue # Move to the next file
+                            continue
 
-                        # --- Main processing logic ---
                         if lower_filename.endswith((".jpg", ".jpeg")):
                             status, error_msg = process_image_file(input_path, output_path, image_q_cfg, delete_original_cfg, image_format_cfg)
 
@@ -349,7 +347,7 @@ if __name__ == "__main__":
                                 else:
                                     status, error_msg = process_video_file(input_path, output_path, video_b_cfg, audio_b_cfg, current_br_kbps, two_pass_cfg, delete_original_cfg, video_codec_cfg, audio_codec_cfg)
                         
-                        else: # Handle unsupported file types
+                        else:
                             try:
                                 if delete_original_cfg:
                                     os.rename(input_path, output_path)
@@ -383,4 +381,4 @@ if __name__ == "__main__":
             log_message(f"Error: {e_main}")
             log_message(traceback.format_exc())
             log_message(f"Sleeping for {DEFAULT_SLEEP_DURATION}s before retrying.")
-            time.sleep(DEFAULT_SLEEP_DURATION)
+            time.sleep(DEFAULT_SLEEP_DURATION)```
