@@ -39,6 +39,9 @@ echo "Making uninstall script executable..."
 if [ -f "uninstall.sh" ]; then
     chmod +x uninstall.sh
 fi
+if [ -f "install-update.sh" ]; then
+    chmod +x install-update.sh
+fi
 
 echo "--------------------------------------"
 echo "Installation/Update complete."
