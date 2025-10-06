@@ -15,13 +15,16 @@ DEFAULT_INPUT_DIRS = ["/storage/emulated/0/DCIM/Camera"]
 DEFAULT_OUTPUT_DIR = "/storage/emulated/0/DCIM/Compressed"
 DEFAULT_VIDEO_BITRATE = 3000
 DEFAULT_AUDIO_BITRATE = 192
-DEFAULT_IMAGE_QUALITY = 7
+DEFAULT_JPG_QUALITY = 7     # For JPG (lower is better, 2-31)
+DEFAULT_AVIF_QUALITY = 40    # For AVIF (higher is worse, 0-63)
+DEFAULT_IMAGE_FORMAT = "jpg" # Options: jpg, avif
+DEFAULT_AUDIO_CODEC = "aac"  # Options: aac, opus
+DEFAULT_VIDEO_CODEC = "h265" # Options: h265, av1
 DEFAULT_TIME_FROM = 23.5
 DEFAULT_TIME_TO = 7.25
 DEFAULT_SLEEP_DURATION = 300
 DEFAULT_DELETE_ORIGINAL = "yes"
 DEFAULT_TWO_PASS_ENCODING = "yes"
-DEFAULT_VIDEO_CODEC = "h265" # New: Default codec
 
 # --- Status constants for file processing ---
 STATUS_COMPLETED = "Completed"
@@ -138,70 +141,38 @@ def cleanup_pass_logs():
         except OSError:
             pass
 
-def process_video_file(input_file, output_file, video_b_cfg, audio_b_cfg, current_bitrate_kbps, two_pass_cfg, delete_original_cfg, video_codec_cfg):
-    """Processes a video file using the specified codec. Returns (STATUS_STRING, error_message_or_None)."""
+def process_video_file(input_file, output_file, video_b_cfg, audio_b_cfg, current_bitrate_kbps, two_pass_cfg, delete_original_cfg, video_codec_cfg, audio_codec_cfg):
+    """Processes a video file using the specified codecs. Returns (STATUS_STRING, error_message_or_None)."""
     filename = os.path.basename(input_file)
     should_compress = current_bitrate_kbps == 0 or current_bitrate_kbps > (video_b_cfg * 1.1)
 
-    # --- New: Set codec-specific FFmpeg parameters ---
     if video_codec_cfg == "av1":
-        ffmpeg_codec = "libaom-av1"
-        # Using -cpu-used makes AV1 encoding much faster at a slight quality/efficiency cost.
-        extra_pass_args = ["-cpu-used", "8"]
-        extra_final_args = []
+        ffmpeg_video_codec, extra_pass_args, extra_final_args = "libaom-av1", ["-cpu-used", "8"], []
     else: # Default to h265
-        ffmpeg_codec = "libx265"
-        extra_pass_args = []
-        # hvc1 tag is for broader compatibility, especially with Apple devices
-        extra_final_args = ["-tag:v", "hvc1"]
+        ffmpeg_video_codec, extra_pass_args, extra_final_args = "libx265", [], ["-tag:v", "hvc1"]
+    
+    ffmpeg_audio_codec = "libopus" if audio_codec_cfg == "opus" else "aac"
 
     if should_compress:
         try:
             if two_pass_cfg:
-                # --- Two-Pass Encoding ---
-                pass1_cmd = [
-                    "ffmpeg", "-y", "-i", input_file,
-                    "-c:v", ffmpeg_codec, "-b:v", f"{video_b_cfg}k",
-                    *extra_pass_args,
-                    "-pass", "1", "-an", "-f", "null", "/dev/null"
-                ]
-                if not _run_command(pass1_cmd, f"Video compression ({ffmpeg_codec} Pass 1)", filename):
+                pass1_cmd = ["ffmpeg", "-y", "-i", input_file, "-c:v", ffmpeg_video_codec, "-b:v", f"{video_b_cfg}k", *extra_pass_args, "-pass", "1", "-an", "-f", "null", "/dev/null"]
+                if not _run_command(pass1_cmd, f"Video compression ({ffmpeg_video_codec} Pass 1)", filename):
                     return STATUS_FAILED, "Compression error (Pass 1)"
 
-                pass2_cmd = [
-                    "ffmpeg", "-i", input_file,
-                    "-map_metadata", "0", "-movflags", "+use_metadata_tags",
-                    "-c:v", ffmpeg_codec, "-b:v", f"{video_b_cfg}k",
-                    *extra_pass_args,
-                    "-pass", "2",
-                    "-c:a", "aac", "-b:a", f"{audio_b_cfg}k",
-                    *extra_final_args,
-                    output_file
-                ]
-                if not _run_command(pass2_cmd, f"Video compression ({ffmpeg_codec} Pass 2)", filename):
+                pass2_cmd = ["ffmpeg", "-i", input_file, "-map_metadata", "0", "-movflags", "+use_metadata_tags", "-c:v", ffmpeg_video_codec, "-b:v", f"{video_b_cfg}k", *extra_pass_args, "-pass", "2", "-c:a", ffmpeg_audio_codec, "-b:a", f"{audio_b_cfg}k", *extra_final_args, output_file]
+                if not _run_command(pass2_cmd, f"Video compression ({ffmpeg_video_codec} Pass 2)", filename):
                     if os.path.exists(output_file): os.remove(output_file)
                     return STATUS_FAILED, "Compression error (Pass 2)"
             else:
-                # --- One-Pass Encoding ---
-                ffmpeg_cmd = [
-                    "ffmpeg", "-y", "-i", input_file,
-                    "-map_metadata", "0", "-movflags", "+use_metadata_tags",
-                    "-c:v", ffmpeg_codec, "-b:v", f"{video_b_cfg}k",
-                    *extra_pass_args, # Also add to one-pass for consistency
-                    "-c:a", "aac", "-b:a", f"{audio_b_cfg}k",
-                    *extra_final_args,
-                    output_file
-                ]
-                if not _run_command(ffmpeg_cmd, f"Video compression ({ffmpeg_codec})", filename):
+                ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_file, "-map_metadata", "0", "-movflags", "+use_metadata_tags", "-c:v", ffmpeg_video_codec, "-b:v", f"{video_b_cfg}k", *extra_pass_args, "-c:a", ffmpeg_audio_codec, "-b:a", f"{audio_b_cfg}k", *extra_final_args, output_file]
+                if not _run_command(ffmpeg_cmd, f"Video compression ({ffmpeg_video_codec})", filename):
                     if os.path.exists(output_file): os.remove(output_file)
                     return STATUS_FAILED, "Compression error"
         finally:
             cleanup_pass_logs()
 
-        exiftool_cmd = [
-            "exiftool", "-m", "-TagsFromFile", input_file,
-            "-all:all>all:all", "-unsafe", "-overwrite_original", output_file
-        ]
+        exiftool_cmd = ["exiftool", "-m", "-TagsFromFile", input_file, "-all:all>all:all", "-unsafe", "-overwrite_original", output_file]
         if not _run_command(exiftool_cmd, "Metadata copy (video)", filename):
             if os.path.exists(output_file): os.remove(output_file)
             return STATUS_FAILED, "Metadata copy error"
@@ -213,33 +184,34 @@ def process_video_file(input_file, output_file, video_b_cfg, audio_b_cfg, curren
                 return STATUS_FAILED, f"Error removing original: {e}"
         
         return STATUS_COMPLETED, None
-
     else: # Bitrate is fine, just move or copy the file
         try:
             if delete_original_cfg:
                 os.rename(input_file, output_file)
                 return STATUS_MOVED, None
             else:
-                shutil.copy2(input_file, output_file) # copy2 preserves metadata
+                shutil.copy2(input_file, output_file)
                 return STATUS_COPIED, None
         except (OSError, shutil.Error) as e:
             return STATUS_FAILED, f"Error moving/copying file: {e}"
 
-
-def process_image_file(input_file, output_file, quality_cfg, delete_original_cfg):
+def process_image_file(input_file, output_file, quality_cfg, delete_original_cfg, image_format_cfg):
     """Processes an image file. Returns (STATUS_STRING, error_message_or_None)."""
     filename = os.path.basename(input_file)
     base, ext = os.path.splitext(output_file)
     temp_output_image = f"{base}_temp_{os.getpid()}{ext}"
 
-    # BUG FIX: Added -noautorotate to prevent ffmpeg from applying rotation.
-    # The rotation metadata will be handled correctly by exiftool later.
-    ffmpeg_cmd = [ "ffmpeg", "-y", "-noautorotate", "-i", input_file, "-q:v", str(quality_cfg), "-f", "image2", temp_output_image ]
-    if not _run_command(ffmpeg_cmd, "Image compression", filename):
+    # BUG FIX: -noautorotate prevents FFmpeg from incorrectly rotating the image.
+    if image_format_cfg == "avif":
+        ffmpeg_cmd = ["ffmpeg", "-y", "-noautorotate", "-i", input_file, "-c:v", "libaom-av1", "-crf", str(quality_cfg), "-cpu-used", "4", temp_output_image]
+    else: # Default to JPG
+        ffmpeg_cmd = ["ffmpeg", "-y", "-noautorotate", "-i", input_file, "-q:v", str(quality_cfg), "-f", "image2", temp_output_image]
+
+    if not _run_command(ffmpeg_cmd, f"Image compression ({image_format_cfg})", filename):
         if os.path.exists(temp_output_image): os.remove(temp_output_image)
         return STATUS_FAILED, "Compression error"
 
-    exiftool_cmd = [ "exiftool", "-m", "-TagsFromFile", input_file, "-all:all>all:all", "-unsafe", "-overwrite_original", temp_output_image ]
+    exiftool_cmd = ["exiftool", "-m", "-TagsFromFile", input_file, "-all:all>all:all", "-unsafe", "-overwrite_original", temp_output_image]
     if not _run_command(exiftool_cmd, "Metadata copy (image)", filename):
         if os.path.exists(temp_output_image): os.remove(temp_output_image)
         return STATUS_FAILED, "Metadata copy error"
@@ -258,7 +230,6 @@ def process_image_file(input_file, output_file, quality_cfg, delete_original_cfg
     
     return STATUS_COMPLETED, None
 
-
 if __name__ == "__main__":
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
     setup_logging(SCRIPT_DIR)
@@ -272,7 +243,6 @@ if __name__ == "__main__":
             _run_command.exiftool_missing_reported = False
             ffprobe_globally_missing = False
 
-            # --- Read Config ---
             raw_config = read_config_yaml(CONFIG_PATH)
             input_dirs_cfg = raw_config.get("input_dir", DEFAULT_INPUT_DIRS)
             if not isinstance(input_dirs_cfg, list) or not input_dirs_cfg:
@@ -280,22 +250,26 @@ if __name__ == "__main__":
             output_dir_cfg = raw_config.get("output_dir", DEFAULT_OUTPUT_DIR)
             video_b_cfg = safe_int(raw_config.get("video_bitrate"), DEFAULT_VIDEO_BITRATE)
             audio_b_cfg = safe_int(raw_config.get("audio_bitrate"), DEFAULT_AUDIO_BITRATE)
-            image_q_cfg = safe_int(raw_config.get("quality"), DEFAULT_IMAGE_QUALITY)
             time_from_cfg = safe_float(raw_config.get("time_from"), DEFAULT_TIME_FROM)
             time_to_cfg = safe_float(raw_config.get("time_to"), DEFAULT_TIME_TO)
             sleep_duration_cfg = safe_int(raw_config.get("sleep_duration"), DEFAULT_SLEEP_DURATION)
             delete_original_cfg = raw_config.get("delete_original", DEFAULT_DELETE_ORIGINAL).lower() == 'yes'
             two_pass_cfg = raw_config.get("two_pass_encoding", DEFAULT_TWO_PASS_ENCODING).lower() == 'yes'
             
-            # --- New: Read video_codec from config ---
             video_codec_cfg = raw_config.get("video_codec", DEFAULT_VIDEO_CODEC).lower()
-            if video_codec_cfg not in ["h265", "av1"]:
-                log_message(f"Warning: Invalid video_codec '{video_codec_cfg}' in config. Falling back to '{DEFAULT_VIDEO_CODEC}'.")
-                video_codec_cfg = DEFAULT_VIDEO_CODEC
-            log_message(f"Using video codec: {video_codec_cfg}")
+            if video_codec_cfg not in ["h265", "av1"]: video_codec_cfg = DEFAULT_VIDEO_CODEC
+            
+            audio_codec_cfg = raw_config.get("audio_codec", DEFAULT_AUDIO_CODEC).lower()
+            if audio_codec_cfg not in ["aac", "opus"]: audio_codec_cfg = DEFAULT_AUDIO_CODEC
+            
+            image_format_cfg = raw_config.get("image_format", DEFAULT_IMAGE_FORMAT).lower()
+            if image_format_cfg not in ["jpg", "avif"]: image_format_cfg = DEFAULT_IMAGE_FORMAT
+            
+            default_q = DEFAULT_AVIF_QUALITY if image_format_cfg == 'avif' else DEFAULT_JPG_QUALITY
+            image_q_cfg = safe_int(raw_config.get("quality"), default_q)
 
+            log_message(f"Using video codec: {video_codec_cfg}, audio codec: {audio_codec_cfg}, image format: {image_format_cfg}")
 
-            # --- Check Time Window ---
             now = datetime.now()
             current_hour_float = now.hour + now.minute / 60.0
             is_time_allowed = (time_from_cfg <= current_hour_float < time_to_cfg) if time_from_cfg < time_to_cfg \
@@ -336,25 +310,35 @@ if __name__ == "__main__":
                 processed_count = 0
                 for i, input_path in enumerate(files_to_process):
                     filename = os.path.basename(input_path)
-                    output_path = os.path.join(output_dir_cfg, filename)
                     log_prefix = f"{i+1}/{len(files_to_process)}: '{filename}' ->"
-
-                    if os.path.exists(output_path):
-                        log_message(f"{log_prefix} {STATUS_SKIPPED_EXISTS}")
-                        if delete_original_cfg:
-                            try:
-                                os.remove(input_path)
-                                log_message(f"  Removed original '{filename}' as output already exists.")
-                            except OSError as e:
-                                log_message(f"  Warning: Could not remove original '{filename}' (output exists): {e}")
-                        processed_count +=1
-                        continue
-
-                    status, error_msg = STATUS_FAILED, "Unknown processing error"
-                    lower_filename = filename.lower()
-
+                    
                     try:
-                        if lower_filename.endswith(".mp4"):
+                        status, error_msg = STATUS_FAILED, "Unknown processing error"
+                        lower_filename = filename.lower()
+                        
+                        # --- BUG FIX: Determine output path and check for existence BEFORE processing ---
+                        output_filename = filename
+                        if lower_filename.endswith((".jpg", ".jpeg")):
+                            base, _ = os.path.splitext(filename)
+                            output_filename = f"{base}.{image_format_cfg}"
+                        output_path = os.path.join(output_dir_cfg, output_filename)
+
+                        if os.path.exists(output_path):
+                            log_message(f"{log_prefix} {STATUS_SKIPPED_EXISTS}")
+                            if delete_original_cfg:
+                                try:
+                                    os.remove(input_path)
+                                    log_message(f"  Removed original '{filename}' as output already exists.")
+                                except OSError as e:
+                                    log_message(f"  Warning: Could not remove original '{filename}' (output exists): {e}")
+                            processed_count += 1
+                            continue # Move to the next file
+
+                        # --- Main processing logic ---
+                        if lower_filename.endswith((".jpg", ".jpeg")):
+                            status, error_msg = process_image_file(input_path, output_path, image_q_cfg, delete_original_cfg, image_format_cfg)
+
+                        elif lower_filename.endswith(".mp4"):
                             if ffprobe_globally_missing:
                                 status, error_msg = STATUS_FAILED, "ffprobe missing"
                             else:
@@ -362,34 +346,20 @@ if __name__ == "__main__":
                                 if current_br_kbps == -1:
                                     ffprobe_globally_missing = True
                                     status, error_msg = STATUS_FAILED, "ffprobe missing"
-                                elif hasattr(_run_command, "ffmpeg_missing_reported") and _run_command.ffmpeg_missing_reported:
-                                    status, error_msg = STATUS_FAILED, "ffmpeg missing"
-                                elif hasattr(_run_command, "exiftool_missing_reported") and _run_command.exiftool_missing_reported:
-                                    status, error_msg = STATUS_FAILED, "exiftool missing"
                                 else:
-                                    # --- Pass the selected codec to the function ---
-                                    status, error_msg = process_video_file(input_path, output_path, video_b_cfg, audio_b_cfg, current_br_kbps, two_pass_cfg, delete_original_cfg, video_codec_cfg)
-
-                        elif lower_filename.endswith((".jpg", ".jpeg")):
-                            if hasattr(_run_command, "ffmpeg_missing_reported") and _run_command.ffmpeg_missing_reported:
-                                 status, error_msg = STATUS_FAILED, "ffmpeg missing"
-                            elif hasattr(_run_command, "exiftool_missing_reported") and _run_command.exiftool_missing_reported:
-                                status, error_msg = STATUS_FAILED, "exiftool missing"
-                            else:
-                                status, error_msg = process_image_file(input_path, output_path, image_q_cfg, delete_original_cfg)
-                        else:
-                            status, error_msg = "Skipped (Unsupported type)", None
+                                    status, error_msg = process_video_file(input_path, output_path, video_b_cfg, audio_b_cfg, current_br_kbps, two_pass_cfg, delete_original_cfg, video_codec_cfg, audio_codec_cfg)
+                        
+                        else: # Handle unsupported file types
                             try:
                                 if delete_original_cfg:
                                     os.rename(input_path, output_path)
-                                    log_message(f"{log_prefix} Moved to output")
+                                    status = "Moved (Unsupported type)"
                                 else:
                                     shutil.copy2(input_path, output_path)
-                                    log_message(f"{log_prefix} Copied to output")
+                                    status = "Copied (Unsupported type)"
+                                error_msg = None
                             except (OSError, shutil.Error) as e:
-                                log_message(f"{log_prefix} Move/Copy failed: {e}")
-                            processed_count +=1
-                            continue
+                                status, error_msg = STATUS_FAILED, f"Move/Copy failed: {e}"
 
                         if error_msg: log_message(f"{log_prefix} {status} (Reason: {error_msg})")
                         else: log_message(f"{log_prefix} {status}")
