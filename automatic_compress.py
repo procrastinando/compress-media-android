@@ -271,9 +271,8 @@ if __name__ == "__main__":
 
             now = datetime.now()
             current_hour_float = now.hour + now.minute / 60.0
-            # BUG FIX: The 'else' clause has been restored to this line
-            is_time_allowed = (time_from_cfg <= current_hour_float < time_to_cfg) if time_from_cfg < time_to_cfg \
-                              else (current_hour_float >= time_from_cfg or current_hour_float < time_to_cfg)
+            # SYNTAX ERROR IS FIXED HERE: Removed the incorrect line break and backslash
+            is_time_allowed = (time_from_cfg <= current_hour_float < time_to_cfg) if time_from_cfg < time_to_cfg else (current_hour_float >= time_from_cfg or current_hour_float < time_to_cfg)
 
             if not is_time_allowed:
                 log_message(f"Outside allowed processing window ({time_from_cfg:.2f} - {time_to_cfg:.2f}). Sleeping...")
