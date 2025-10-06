@@ -29,6 +29,11 @@ delete_original: yes
 #         Only use 'av1' if you have a very powerful CPU and are not concerned about long processing times.
 video_codec: h265
 
+# The audio codec to use for video soundtracks.
+# 'aac': (Default) Excellent compatibility with almost all devices.
+# 'opus': A more modern, efficient codec. Great for quality at lower bitrates.
+audio_codec: aac
+
 # Target video bitrate in kbps (kilobits per second).
 # Videos with a bitrate higher than this (plus a small margin) will be compressed.
 # A lower value means smaller file size but potentially lower quality.
@@ -36,6 +41,7 @@ video_codec: h265
 video_bitrate: 3000
 
 # Target audio bitrate for videos in kbps.
+# If using 'opus', a value of 128 kbps is often recommended for excellent quality.
 audio_bitrate: 192
 
 # Use a two-pass encoding method for videos for potentially better quality at the target bitrate.
@@ -45,10 +51,15 @@ two_pass_encoding: yes
 
 # --- Image Settings ---
 
-# Image compression quality for JPEG files.
-# This is an FFMpeg setting where a lower value is HIGHER quality.
-# A value from 2 (highest quality, larger file) to 31 (lowest quality, smaller file).
-# A value of 5-8 is a good balance for saving space without noticeable quality loss.
+# The output format for compressed images.
+# 'jpg': (Default) The most compatible format. Fast to process.
+# 'avif': Modern format with superior compression. Produces files ~3 times smaller than JPG
+#         with no visible quality loss, but takes ~20 times longer to process.
+image_format: jpg
+
+# Image compression quality. The meaning of this value depends on the 'image_format' chosen above.
+# For 'jpg': A value from 2 (highest quality) to 31 (lowest quality). A value of 7 is a good balance.
+# For 'avif': A value from 0 (lossless) to 63 (lowest quality). A value of 40 is a good balance.
 quality: 7
 
 # --- Scheduling Options ---
