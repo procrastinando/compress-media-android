@@ -59,7 +59,7 @@ image_format: jpg
 
 # Image compression quality. The meaning of this value depends on the 'image_format' chosen above.
 # For 'jpg': A value from 2 (highest quality) to 31 (lowest quality). A value of 7 is a good balance.
-# For 'avif': A value from 0 (lossless) to 63 (lowest quality). A value of 40 is a good balance.
+# For 'avif': A value from 0 (lossless) to 63 (lowest quality). A value of 30 is a good balance.
 quality: 7
 
 # --- Scheduling Options ---
@@ -73,3 +73,4 @@ time_to: 7.25
 
 # How long to sleep (in seconds) between checking for new files in the input directories.
 sleep_duration: 300
+
