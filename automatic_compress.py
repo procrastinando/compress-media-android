@@ -16,7 +16,7 @@ DEFAULT_OUTPUT_DIR = "/storage/emulated/0/DCIM/Compressed"
 DEFAULT_VIDEO_BITRATE = 3000
 DEFAULT_AUDIO_BITRATE = 192
 DEFAULT_JPG_QUALITY = 7     # For JPG (lower is better, 2-31)
-DEFAULT_AVIF_QUALITY = 40    # For AVIF (higher is worse, 0-63)
+DEFAULT_AVIF_QUALITY = 30    # For AVIF (higher is worse, 0-63)
 DEFAULT_IMAGE_FORMAT = "jpg" # Options: jpg, avif
 DEFAULT_AUDIO_CODEC = "aac"  # Options: aac, opus
 DEFAULT_VIDEO_CODEC = "h265" # Options: h265, av1
@@ -202,18 +202,27 @@ def process_image_file(input_file, output_file, quality_cfg, delete_original_cfg
     temp_output_image = f"{base}_temp_{os.getpid()}{ext}"
 
     if image_format_cfg == "avif":
-        ffmpeg_cmd = ["ffmpeg", "-y", "-noautorotate", "-i", input_file, "-c:v", "libaom-av1", "-crf", str(quality_cfg), "-cpu-used", "4", temp_output_image]
+        # Removed -noautorotate to let FFmpeg handle orientation correctly
+        ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_file, "-c:v", "libaom-av1", "-crf", str(quality_cfg), "-cpu-used", "4", temp_output_image]
     else: # Default to JPG
-        ffmpeg_cmd = ["ffmpeg", "-y", "-noautorotate", "-i", input_file, "-q:v", str(quality_cfg), "-f", "image2", temp_output_image]
+        # Removed -noautorotate to let FFmpeg handle orientation correctly
+        ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_file, "-q:v", str(quality_cfg), "-f", "image2", temp_output_image]
 
     if not _run_command(ffmpeg_cmd, f"Image compression ({image_format_cfg})", filename):
         if os.path.exists(temp_output_image): os.remove(temp_output_image)
         return STATUS_FAILED, "Compression error"
 
-    exiftool_cmd = ["exiftool", "-m", "-TagsFromFile", input_file, "-all:all>all:all", "-unsafe", "-overwrite_original", temp_output_image]
+    # Copy metadata but exclude orientation tag since FFmpeg already rotated the image
+    exiftool_cmd = ["exiftool", "-m", "-TagsFromFile", input_file, "-all:all>all:all", "--Orientation", "-unsafe", "-overwrite_original", temp_output_image]
     if not _run_command(exiftool_cmd, "Metadata copy (image)", filename):
         if os.path.exists(temp_output_image): os.remove(temp_output_image)
         return STATUS_FAILED, "Metadata copy error"
+
+    # Set orientation to normal (1) since the image is now physically rotated correctly
+    reset_orientation_cmd = ["exiftool", "-Orientation=1", "-n", "-overwrite_original", temp_output_image]
+    if not _run_command(reset_orientation_cmd, "Reset orientation tag", filename):
+        if os.path.exists(temp_output_image): os.remove(temp_output_image)
+        return STATUS_FAILED, "Orientation reset error"
 
     try:
         os.replace(temp_output_image, output_file)
@@ -381,3 +390,4 @@ if __name__ == "__main__":
             log_message(traceback.format_exc())
             log_message(f"Sleeping for {DEFAULT_SLEEP_DURATION}s before retrying.")
             time.sleep(DEFAULT_SLEEP_DURATION)```
+
