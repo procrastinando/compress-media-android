@@ -142,36 +142,83 @@ def cleanup_pass_logs():
             pass
 
 def process_video_file(input_file, output_file, video_b_cfg, audio_b_cfg, current_bitrate_kbps, two_pass_cfg, delete_original_cfg, video_codec_cfg, audio_codec_cfg):
-    """Processes a video file using the specified codecs. Returns (STATUS_STRING, error_message_or_None)."""
+    """
+    Processes a video file, prioritizing hardware acceleration on Android with a software fallback.
+    Returns (STATUS_STRING, error_message_or_None).
+    """
     filename = os.path.basename(input_file)
     should_compress = current_bitrate_kbps == 0 or current_bitrate_kbps > (video_b_cfg * 1.1)
 
-    if video_codec_cfg == "av1":
-        ffmpeg_video_codec, extra_pass_args, extra_final_args = "libaom-av1", ["-cpu-used", "8"], []
-    else: # Default to h265
-        ffmpeg_video_codec, extra_pass_args, extra_final_args = "libx265", [], ["-tag:v", "hvc1"]
-    
+    # Note on Opus: Hardware acceleration is not used for Opus ('libopus') as it's
+    # already extremely efficient on the CPU.
     ffmpeg_audio_codec = "libopus" if audio_codec_cfg == "opus" else "aac"
 
     if should_compress:
-        try:
-            if two_pass_cfg:
-                pass1_cmd = ["ffmpeg", "-y", "-i", input_file, "-c:v", ffmpeg_video_codec, "-b:v", f"{video_b_cfg}k", *extra_pass_args, "-pass", "1", "-an", "-f", "null", "/dev/null"]
-                if not _run_command(pass1_cmd, f"Video compression ({ffmpeg_video_codec} Pass 1)", filename):
-                    return STATUS_FAILED, "Compression error (Pass 1)"
+        # Define encoding attempts in order of preference (Hardware first)
+        if video_codec_cfg == "av1":
+            attempts = [
+                {"codec": "av1_mediacodec", "type": "Hardware", "extra_args": []},
+                {"codec": "libaom-av1", "type": "Software", "extra_args": ["-cpu-used", "8"]}
+            ]
+            final_args = []
+        else: # Default to h265
+            attempts = [
+                {"codec": "hevc_mediacodec", "type": "Hardware", "extra_args": []},
+                {"codec": "libx265", "type": "Software", "extra_args": []}
+            ]
+            final_args = ["-tag:v", "hvc1"]
 
-                pass2_cmd = ["ffmpeg", "-i", input_file, "-map_metadata", "0", "-movflags", "+use_metadata_tags", "-c:v", ffmpeg_video_codec, "-b:v", f"{video_b_cfg}k", *extra_pass_args, "-pass", "2", "-c:a", ffmpeg_audio_codec, "-b:a", f"{audio_b_cfg}k", *extra_final_args, output_file]
-                if not _run_command(pass2_cmd, f"Video compression ({ffmpeg_video_codec} Pass 2)", filename):
-                    if os.path.exists(output_file): os.remove(output_file)
-                    return STATUS_FAILED, "Compression error (Pass 2)"
-            else:
-                ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_file, "-map_metadata", "0", "-movflags", "+use_metadata_tags", "-c:v", ffmpeg_video_codec, "-b:v", f"{video_b_cfg}k", *extra_pass_args, "-c:a", ffmpeg_audio_codec, "-b:a", f"{audio_b_cfg}k", *extra_final_args, output_file]
-                if not _run_command(ffmpeg_cmd, f"Video compression ({ffmpeg_video_codec})", filename):
-                    if os.path.exists(output_file): os.remove(output_file)
-                    return STATUS_FAILED, "Compression error"
+        encoding_successful = False
+        last_error = "Unknown encoding error"
+        
+        try:
+            for attempt in attempts:
+                ffmpeg_video_codec = attempt["codec"]
+                encoder_type = attempt["type"]
+                extra_pass_args = attempt["extra_args"]
+                
+                print(f"Attempting compression with {ffmpeg_video_codec} ({encoder_type})...")
+
+                # Hardware encoders are typically single-pass. Software can be two-pass.
+                if encoder_type == "Hardware":
+                    ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_file, "-map_metadata", "0", "-movflags", "+use_metadata_tags", "-c:v", ffmpeg_video_codec, "-b:v", f"{video_b_cfg}k", *extra_pass_args, "-c:a", ffmpeg_audio_codec, "-b:a", f"{audio_b_cfg}k", *final_args, output_file]
+                    if _run_command(ffmpeg_cmd, f"Video compression ({ffmpeg_video_codec})", filename):
+                        encoding_successful = True
+                        break # Success, exit the loop
+                    else:
+                        last_error = f"Hardware encoding failed ({ffmpeg_video_codec})"
+                        if os.path.exists(output_file): os.remove(output_file)
+
+                elif encoder_type == "Software":
+                    if two_pass_cfg:
+                        pass1_cmd = ["ffmpeg", "-y", "-i", input_file, "-c:v", ffmpeg_video_codec, "-b:v", f"{video_b_cfg}k", *extra_pass_args, "-pass", "1", "-an", "-f", "null", "/dev/null"]
+                        if not _run_command(pass1_cmd, f"Video compression ({ffmpeg_video_codec} Pass 1)", filename):
+                            last_error = f"Software encoding failed (Pass 1 - {ffmpeg_video_codec})"
+                            continue # Try next attempt if any
+
+                        pass2_cmd = ["ffmpeg", "-i", input_file, "-map_metadata", "0", "-movflags", "+use_metadata_tags", "-c:v", ffmpeg_video_codec, "-b:v", f"{video_b_cfg}k", *extra_pass_args, "-pass", "2", "-c:a", ffmpeg_audio_codec, "-b:a", f"{audio_b_cfg}k", *final_args, output_file]
+                        if _run_command(pass2_cmd, f"Video compression ({ffmpeg_video_codec} Pass 2)", filename):
+                            encoding_successful = True
+                            break # Success, exit the loop
+                        else:
+                            last_error = f"Software encoding failed (Pass 2 - {ffmpeg_video_codec})"
+                            if os.path.exists(output_file): os.remove(output_file)
+                    else: # Single-pass software
+                        ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_file, "-map_metadata", "0", "-movflags", "+use_metadata_tags", "-c:v", ffmpeg_video_codec, "-b:v", f"{video_b_cfg}k", *extra_pass_args, "-c:a", ffmpeg_audio_codec, "-b:a", f"{audio_b_cfg}k", *final_args, output_file]
+                        if _run_command(ffmpeg_cmd, f"Video compression ({ffmpeg_video_codec})", filename):
+                            encoding_successful = True
+                            break # Success, exit the loop
+                        else:
+                            last_error = f"Software encoding failed (Single Pass - {ffmpeg_video_codec})"
+                            if os.path.exists(output_file): os.remove(output_file)
+        
         finally:
             cleanup_pass_logs()
 
+        if not encoding_successful:
+            return STATUS_FAILED, f"Compression error: All attempts failed. Last error: {last_error}"
+
+        # --- Metadata copy and finalization (same as before) ---
         exiftool_cmd = ["exiftool", "-m", "-TagsFromFile", input_file, "-all:all>all:all", "-unsafe", "-overwrite_original", output_file]
         if not _run_command(exiftool_cmd, "Metadata copy (video)", filename):
             if os.path.exists(output_file): os.remove(output_file)
@@ -184,7 +231,8 @@ def process_video_file(input_file, output_file, video_b_cfg, audio_b_cfg, curren
                 return STATUS_FAILED, f"Error removing original: {e}"
         
         return STATUS_COMPLETED, None
-    else: # Bitrate is fine, just move or copy the file
+    
+    else: # Bitrate is fine, just move or copy the file (same as before)
         try:
             if delete_original_cfg:
                 os.rename(input_file, output_file)
@@ -390,4 +438,5 @@ if __name__ == "__main__":
             log_message(traceback.format_exc())
             log_message(f"Sleeping for {DEFAULT_SLEEP_DURATION}s before retrying.")
             time.sleep(DEFAULT_SLEEP_DURATION)```
+
 
