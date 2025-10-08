@@ -4,11 +4,11 @@ Compress Media Android is a powerful, automated solution to help you save storag
 
 ## Features
 
+*   **100% local**: No big tech involved, it is only you and your phone.
 *   **Automatic Monitoring**: Runs in the background and watches your specified folders for new files.
 *   **Video & Image Compression**: Intelligently compresses both videos and images to save space.
 *   **Modern Codec Support**: Choose between standard codecs for compatibility (`h265`, `jpg`, `aac`) or modern codecs for superior efficiency (`av1`, `avif`, `opus`).
 *   **Metadata Preservation**: Keeps all original metadata (like GPS location, date, and time) in the compressed files.
-*   **Correct Orientation Handling**: Automatically preserves the correct image rotation.
 *   **Highly Configurable**: Fine-tune everything from compression quality and codecs to a daily processing schedule.
 
 ## 1. Requirements
