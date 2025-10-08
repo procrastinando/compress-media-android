@@ -59,7 +59,7 @@ The script will automatically apply your new settings on its next cycle (within 
     *   `avif`: Modern format. Provides files ~3 times smaller than JPG with no visible quality loss, but takes **~20 times longer** to process.
 *   `quality`: Sets the compression level. **The meaning of this value depends on the `image_format` you choose!**
     *   For `jpg`: A value from `2` (best quality) to `31` (worst quality). A value of `7` is a good balance.
-    *   For `avif`: A value from `0` (lossless) to `63` (worst quality). A value of `40` is a good balance.
+    *   For `avif`: A value from `0` (lossless) to `63` (worst quality). A value of `30` is a good balance.
 
 #### Scheduling Settings
 *   `time_from` / `time_to`: The time window during which the script is allowed to run (e.g., only at night).
