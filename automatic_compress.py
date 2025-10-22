@@ -116,11 +116,25 @@ def get_video_bitrate(file_path):
 def _run_command(command_list, operation_name, filename):
     """Helper to run subprocess and handle common errors, returns True on success."""
     try:
-        subprocess.run(command_list, check=True, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+        # FIXED: Redirect stdout and stderr to DEVNULL to prevent pipe buffers from filling up.
+        # We lose the detailed error message in the exception, but we fix the hang.
+        subprocess.run(command_list, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
     except subprocess.CalledProcessError as e:
-        error_detail = e.stderr.strip().splitlines()[-1] if e.stderr and e.stderr.strip() else "No error detail"
-        log_message(f"  Debug: {operation_name} for '{filename}' failed. CMD: {' '.join(command_list)}. Error: {error_detail}")
+        # The error message from stderr is no longer captured, so we provide a generic one.
+        # The exit code is still available in e.returncode if needed.
+        log_message(f"  Debug: {operation_name} for '{filename}' failed. CMD: {' '.join(command_list)}. Error: Process returned non-zero exit code {e.returncode}.")
+        return False
+    except FileNotFoundError:
+        tool_name = command_list[0]
+        log_message(f"Error: Command '{tool_name}' not found. Please ensure it's installed and in PATH.")
+        if tool_name == "ffmpeg" and not hasattr(_run_command, "ffmpeg_missing_reported"):
+            _run_command.ffmpeg_missing_reported = True
+        elif tool_name == "exiftool" and not hasattr(_run_command, "exiftool_missing_reported"):
+            _run_command.exiftool_missing_reported = True
+        return False
+    except Exception as e:
+        log_message(f"  Debug: Unexpected error during {operation_name} for '{filename}': {e}")
         return False
     except FileNotFoundError:
         tool_name = command_list[0]
@@ -438,5 +452,6 @@ if __name__ == "__main__":
             log_message(traceback.format_exc())
             log_message(f"Sleeping for {DEFAULT_SLEEP_DURATION}s before retrying.")
             time.sleep(DEFAULT_SLEEP_DURATION)```
+
 
 
