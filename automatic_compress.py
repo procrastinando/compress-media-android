@@ -12,33 +12,43 @@ SETTINGS_FILE = "settings.json"
 
 def log_message(message):
     """Appends a message to the global log file AND prints to terminal."""
-    # 1. PRINT TO TERMINAL
     print(message) 
-    
-    # 2. SAVE TO FILE
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(message + "\n")
     except OSError:
         print(f"Error: Could not write to {LOG_FILE}")
 
-def run_command(command):
-    """Runs a command, captures output, and returns True on success."""
+def run_command(command, verbose=False):
+    """
+    Runs a command.
+    If verbose is True: Prints output to terminal (allows seeing FFmpeg errors).
+    If verbose is False: Captures and hides output (clean mode).
+    """
     try:
+        if verbose:
+            print(f"Running command: {' '.join(command)}")
+        
         subprocess.run(
             command,
             check=True,
-            capture_output=True,
+            # If verbose is True, we DO NOT capture output (let it flow to terminal)
+            # If verbose is False, we capture output (silence it)
+            capture_output=not verbose, 
             text=True,
             encoding='utf-8',
             errors='ignore'
         )
-        # Remove the '_original' file if exiftool created one
+        
         backup_file = command[-1] + "_original"
         if os.path.exists(backup_file):
             os.remove(backup_file)
         return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        if verbose:
+            print(f"!!! COMMAND FAILED !!!")
+            if hasattr(e, 'stderr') and e.stderr:
+                print(f"Error details: {e.stderr}")
         return False
 
 def get_video_duration(file_path):
@@ -64,47 +74,45 @@ def get_bitrate(file_path):
         result = subprocess.run(command, capture_output=True, text=True, check=True)
         bitrate_bps_str = result.stdout.strip()
         if bitrate_bps_str and bitrate_bps_str.lower() != 'n/a':
-            return int(bitrate_bps_str) / 1000  # Convert bps to kbps
+            return int(bitrate_bps_str) / 1000
     except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
         return 0
     return 0
 
 # --- Ultimate Metadata Transfer Functions ---
 
-def transfer_image_metadata(source_file, dest_file):
-    """Transfers all metadata and correctly resets orientation."""
+def transfer_image_metadata(source_file, dest_file, verbose=False):
     copy_cmd = [
         "exiftool", "-m", "-TagsFromFile", source_file,
         "-all:all", "-unsafe", "-overwrite_original", dest_file
     ]
-    if not run_command(copy_cmd):
+    if not run_command(copy_cmd, verbose):
         return False
 
     orient_cmd = [
         "exiftool", "-m", "-Orientation=1", "-n",
         "-overwrite_original", dest_file
     ]
-    if not run_command(orient_cmd):
+    if not run_command(orient_cmd, verbose):
         return False
     
     return True
 
-def transfer_video_metadata(source_file, dest_file):
-    """Performs a robust metadata transfer for video files."""
+def transfer_video_metadata(source_file, dest_file, verbose=False):
     copy_cmd = [
         "exiftool", "-m", "-TagsFromFile", source_file,
         "-all:all", "-unsafe", "-overwrite_original", dest_file
     ]
-    return run_command(copy_cmd)
+    return run_command(copy_cmd, verbose)
 
 # --- Main Processing Logic ---
 
 def process_image(file_path, settings):
-    """Orchestrates the conversion and metadata transfer for an image."""
     start_process_time = time.time()
     
     s_user = settings['user_settings']
     s_codecs = settings['codecs']
+    is_verbose = s_user.get('verbose', False)
     
     output_dir = s_user['output_dir']
     image_format = s_user['image']
@@ -113,9 +121,6 @@ def process_image(file_path, settings):
     base_name = os.path.splitext(os.path.basename(file_path))[0]
     output_path = os.path.join(output_dir, f"{base_name}.{image_format}")
     
-    # REQUIREMENT CHECK: Overwrite without asking. 
-    # Removed the "if os.path.exists return" check.
-
     # Build ffmpeg command
     if image_format == 'avif':
         cmd = [
@@ -133,14 +138,12 @@ def process_image(file_path, settings):
             output_path
         ]
     else:
-        return # Unsupported image format in settings
+        return 
 
-    # Execute conversion
-    if run_command(cmd):
-        # Transfer metadata
-        if transfer_image_metadata(file_path, output_path):
+    if run_command(cmd, is_verbose):
+        if transfer_image_metadata(file_path, output_path, is_verbose):
             try:
-                os.remove(file_path) # Delete original
+                os.remove(file_path)
                 duration = time.time() - start_process_time
                 timestamp = datetime.datetime.now().strftime('%H:%M:%S')
                 log_message(f"{timestamp} > {os.path.basename(output_path)} > {duration:.2f}s")
@@ -148,11 +151,11 @@ def process_image(file_path, settings):
                 pass 
 
 def process_video(file_path, settings):
-    """Orchestrates video processing with bitrate check."""
     start_process_time = time.time()
 
     s_user = settings['user_settings']
     s_codecs = settings['codecs']
+    is_verbose = s_user.get('verbose', False)
     
     output_dir = s_user['output_dir']
     video_codec = s_user['video']
@@ -162,9 +165,6 @@ def process_video(file_path, settings):
 
     base_name = os.path.splitext(os.path.basename(file_path))[0]
     output_path = os.path.join(output_dir, f"{base_name}.mp4")
-
-    # REQUIREMENT CHECK: Overwrite without asking.
-    # Removed the "if os.path.exists return" check.
 
     # --- BITRATE CHECK ---
     try:
@@ -182,13 +182,11 @@ def process_video(file_path, settings):
     )
 
     if not should_convert:
-        # Just move the file (overwrite if needed)
         try:
             if os.path.exists(output_path):
-                os.remove(output_path) # Ensure we can move
+                os.remove(output_path)
             os.rename(file_path, output_path)
             timestamp = datetime.datetime.now().strftime('%H:%M:%S')
-            # REQUIREMENT CHECK: Specific log format
             log_message(f"{timestamp} > {os.path.basename(file_path)} > Skipped")
         except OSError:
             pass
@@ -217,7 +215,6 @@ def process_video(file_path, settings):
 
     success = False
     if s_user.get('two_pass', False):
-        # Two-pass logic
         video_opts_pass2 = ["-c:v", video_codec, "-b:v", codec_settings.get('bitrate', '2500k')]
         if 'preset' in codec_settings: video_opts_pass2.extend(["-preset", str(codec_settings['preset'])])
         
@@ -225,18 +222,17 @@ def process_video(file_path, settings):
         pass1_cmd = base_cmd + video_opts + ["-pass", "1", "-passlogfile", pass1_log_file, "-an", "-f", "null", os.devnull]
         pass2_cmd = base_cmd + video_opts_pass2 + audio_opts + ["-pass", "2", "-passlogfile", pass1_log_file, output_path]
 
-        success = run_command(pass1_cmd) and run_command(pass2_cmd)
+        success = run_command(pass1_cmd, is_verbose) and run_command(pass2_cmd, is_verbose)
         
         for log_file in glob.glob(f"{pass1_log_file}*"):
             try: os.remove(log_file)
             except OSError: pass
     else:
-        # One-pass logic
         cmd = base_cmd + video_opts + audio_opts + [output_path]
-        success = run_command(cmd)
+        success = run_command(cmd, is_verbose)
 
     if success:
-        if transfer_video_metadata(file_path, output_path):
+        if transfer_video_metadata(file_path, output_path, is_verbose):
             try:
                 os.remove(file_path)
                 total_duration = time.time() - start_process_time
@@ -248,20 +244,17 @@ def process_video(file_path, settings):
                 pass
 
 def is_in_schedule(start_float, end_float):
-    """Checks if the current time is within the scheduled window."""
     now = datetime.datetime.now()
     current_hour_float = now.hour + now.minute / 60.0
     
-    if start_float > end_float: # Overnight schedule
+    if start_float > end_float:
         return current_hour_float >= start_float or current_hour_float < end_float
-    else: # Day schedule
+    else:
         return start_float <= current_hour_float < end_float
 
 def main():
-    """The main loop."""
     while True:
         try:
-            # Load settings every loop to allow live updates
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 settings = json.load(f)
             
@@ -272,10 +265,8 @@ def main():
                 time.sleep(s_sched['sleep'])
                 continue
 
-            # Create output directory
             os.makedirs(s_user['output_dir'], exist_ok=True)
             
-            # Find files
             files_to_process = []
             allowed_exts = tuple(f".{ext}" for ext in s_user['files'])
             image_exts = ('.jpg', '.jpeg', '.heic')
@@ -289,7 +280,6 @@ def main():
             if files_to_process:
                 log_message(f"<<<<< {len(files_to_process)} files found, starting conversion >>>>>")
                 for file_path in files_to_process:
-                    # Check if file still exists (in case user deleted it while script was running)
                     if not os.path.exists(file_path):
                         continue
                         
