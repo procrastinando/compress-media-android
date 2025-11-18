@@ -68,7 +68,7 @@ The script will automatically apply your new settings on its next cycle (within 
 | Parameter | Description | Range / Alternatives |
 | :--- | :--- | :--- |
 | **`crf`** | Constant Rate Factor (Quality). Lower = Better quality, larger file. | **AV1:** `20`-`40` (Rec: 25)<br>**x264/5:** `18`-`28` (Rec: 23) |
-| **`preset`** | Encoding speed. Slower=Better compression. | **SVT-AV1:** `0`best - `13` worst (Rec: 8-10) **x264/5:** `veryslow`, `medium`, `ultrafast` |
+| **`preset`** | Encoding speed. Slower=Better compression. | **SVT-AV1:** `0`best - `13` worst (Rec: 8-10)<br>**x264/5:** `veryslow`, `medium`, `ultrafast` |
 | **`bitrate`** | Target bitrate (ignored if CRF is used in 1-pass). | String: `"2500k"`, `"4M"` |
 | **`cpu_use`** | (libaom-av1 only) CPU utilization efficiency. | `0`-`8` (Rec: 4-6) |
 | **`row`** | (libaom-av1 only) Enable row-based multithreading. | `1` (on), `0` (off) |
