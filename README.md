@@ -40,39 +40,55 @@ You can customize the script's behavior by editing the settings file.
 
 The script will automatically apply your new settings on its next cycle (within 5 minutes). You only need to restart your phone if you want the changes to apply immediately or if you have just installed the script for the first time.
 
-### **Configuration**
+---
 
-#### **Core Settings**
-*   `input_dir`: Folders to scan for media.
-*   `output_dir`: Where to save converted files.
-*   `files`: File extensions to process (e.g., `mp4`, `jpg`).
+### User Settings (`user_settings`)
 
-#### **General Conversion Choices**
-*   `image`: Output format (`avif` or `jpg`).
-*   `video`: Video codec (`libsvtav1`, `libaom-av1`, `h265`).
-*   `audio`: Audio codec (`opus` or `aac`).
-*   `two_pass`: `true` for better quality at the cost of double the time.
+| Setting | Description | Values / Range |
+| :--- | :--- | :--- |
+| **`input_dir`** | List of folders to scan for files. | `["/path/to/A", "/path/to/B"]` |
+| **`output_dir`** | Folder where converted files are saved. | `"/path/to/output"` |
+| **`files`** | File extensions to detect and process. | `["mp4", "mov", "jpg", "heic", ...]` |
+| **`verbose`** | Show full FFmpeg logs in the terminal. | `true` (debug), `false` (clean logs) |
+| **`image`** | Target format for image conversion. | `avif` (recommended), `jpg` |
+| **`video`** | Target video encoder to use. | `libsvtav1` (fast AV1), `libaom-av1` (high qual), `libx264`, `libx265` |
+| **`audio`** | Target audio encoder to use. | `libopus` (best), `aac` |
+| **`two_pass`** | Enables 2-pass encoding (slower, accurate size). | `true`, `false` (recommended for CRF) |
 
-#### **Codec Parameters (Fine-Tuning)**
+### Scheduling
+| Setting | Description | Values |
+| :--- | :--- | :--- |
+| `start_time` | Hour to start processing (24h format). | `0` - `24` (e.g., `22.5` is 10:30 PM) |
+| `end_time` | Hour to stop processing. | `0` - `24` (e.g., `7.0` is 7:00 AM) |
+| `sleep` | Wait time between folder scans (in seconds). | Integer (e.g., `60`, `300`) |
 
-**Quality & Bitrate**
-*   `crf`: The main **quality** setting for video. **Lower is better.**
-*   `bitrate`: Alternative to `crf`. Sets a target file size (kbps).
-*   `quality`:
-    *   **Images**: `jpg` (`2`-best to `31`-worst) / `avif` (`0`-best to `63`-worst).
-    *   **AAC Audio**: VBR quality (`~0.1` to `2`). **Higher is better.**
-*   `vbr` (Opus): `on` or `off` to enable Variable Bit Rate.
+### Codec Settings (`codecs`)
 
-**Speed & Performance**
-*   `preset` (h265/libsvtav1): Speed vs. compression.
-    *   **h265**: `medium` to `ultrafast`.
-    *   **libsvtav1**: `0` (slowest) to `13` (fastest).
-*   `cpu_use` (libaom-av1): `0` (slowest/best) to `8` (fastest/worst).
-*   `row` / `threads` (libaom-av1): Toggles multithreading for better CPU usage.
-*   `huffman` (jpg): `optimal` for slightly smaller file size.
+#### - Video Encoders (`libsvtav1`, `libaom-av1`, `h265`, `libx264`)
+| Parameter | Description | Range / Alternatives |
+| :--- | :--- | :--- |
+| **`crf`** | Constant Rate Factor (Quality). Lower = Better quality, larger file. | **AV1:** `20`-`40` (Rec: 25)<br>**x264/5:** `18`-`28` (Rec: 23) |
+| **`preset`** | Encoding speed. Slower=Better compression. | **SVT-AV1:** `0`best - `13` worst (Rec: 8-10) **x264/5:** `veryslow`, `medium`, `ultrafast` |
+| **`bitrate`** | Target bitrate (ignored if CRF is used in 1-pass). | String: `"2500k"`, `"4M"` |
+| **`cpu_use`** | (libaom-av1 only) CPU utilization efficiency. | `0`-`8` (Rec: 4-6) |
+| **`row`** | (libaom-av1 only) Enable row-based multithreading. | `1` (on), `0` (off) |
 
-#### **Scheduling**
-*   `start_time` / `end_time`: Active hours for the script (e.g., `22.5` to `7.25`).
+#### - Audio Encoders (`libopus`, `aac`)
+| Parameter | Description | Range / Alternatives |
+| :--- | :--- | :--- |
+| **`bitrate`** | Audio bitrate. | `"64k"`, `"96k"` (Opus), `"128k"`, `"192k"` (AAC) |
+| **`vbr`** | (Opus) Variable Bit Rate mode. | `"on"`, `"off"`, `"constrained"` |
+| **`quality`** | (AAC) VBR Quality setting. | `0.1` - `2.0` (Higher is better) |
+
+### - Image Encoders
+| Format | Parameter | Description | Range |
+| :--- | :--- | :--- | :--- |
+| **`avif`** | `quality` | CRF value (Inverse quality). | `20`-`40` (Lower is better) |
+| | `cpu_use` | Speed setting. | `0`-`8` (Higher is faster) |
+| **`jpg`** | `quality` | FFmpeg q-scale. | `2`-`31` (Lower is better, Rec: 2-5) |
+| | `huffman` | Coding table strategy. | `"optimal"`, `"default"` |
+
+---
 
 ## 5. Verifying and Monitoring
 *   **After rebooting**, you can check that the compressor is running in the background with this command in Termux:
