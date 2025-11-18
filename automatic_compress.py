@@ -11,9 +11,16 @@ SETTINGS_FILE = "settings.json"
 # --- Core Helper Functions ---
 
 def log_message(message):
-    """Appends a message to the global log file."""
-    with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(message + "\n")
+    """Appends a message to the global log file AND prints to terminal."""
+    # 1. PRINT TO TERMINAL
+    print(message) 
+    
+    # 2. SAVE TO FILE
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(message + "\n")
+    except OSError:
+        print(f"Error: Could not write to {LOG_FILE}")
 
 def run_command(command):
     """Runs a command, captures output, and returns True on success."""
@@ -26,6 +33,7 @@ def run_command(command):
             encoding='utf-8',
             errors='ignore'
         )
+        # Remove the '_original' file if exiftool created one
         backup_file = command[-1] + "_original"
         if os.path.exists(backup_file):
             os.remove(backup_file)
@@ -46,10 +54,7 @@ def get_video_duration(file_path):
         return 0.0
     
 def get_bitrate(file_path):
-    """
-    Returns the overall bitrate of a video file in kbps.
-    Returns 0 if bitrate cannot be determined.
-    """
+    """Returns the overall bitrate of a video file in kbps."""
     command = [
         "ffprobe", "-v", "error", "-select_streams", "v:0",
         "-show_entries", "stream=bit_rate",
@@ -108,8 +113,8 @@ def process_image(file_path, settings):
     base_name = os.path.splitext(os.path.basename(file_path))[0]
     output_path = os.path.join(output_dir, f"{base_name}.{image_format}")
     
-    if os.path.exists(output_path):
-        return # Skip if already converted
+    # REQUIREMENT CHECK: Overwrite without asking. 
+    # Removed the "if os.path.exists return" check.
 
     # Build ffmpeg command
     if image_format == 'avif':
@@ -128,25 +133,22 @@ def process_image(file_path, settings):
             output_path
         ]
     else:
-        return # Unsupported image format
+        return # Unsupported image format in settings
 
-    # Execute conversion, metadata transfer, and cleanup
+    # Execute conversion
     if run_command(cmd):
+        # Transfer metadata
         if transfer_image_metadata(file_path, output_path):
             try:
-                os.remove(file_path)
+                os.remove(file_path) # Delete original
                 duration = time.time() - start_process_time
                 timestamp = datetime.datetime.now().strftime('%H:%M:%S')
                 log_message(f"{timestamp} > {os.path.basename(output_path)} > {duration:.2f}s")
             except OSError:
-                pass # Failed to delete, but conversion was successful
+                pass 
 
 def process_video(file_path, settings):
-    """
-    Orchestrates video processing with new bitrate check logic.
-    Converts only if the source bitrate is significantly higher than the target.
-    Otherwise, it moves the original file.
-    """
+    """Orchestrates video processing with bitrate check."""
     start_process_time = time.time()
 
     s_user = settings['user_settings']
@@ -161,19 +163,18 @@ def process_video(file_path, settings):
     base_name = os.path.splitext(os.path.basename(file_path))[0]
     output_path = os.path.join(output_dir, f"{base_name}.mp4")
 
-    if os.path.exists(output_path):
-        return # Skip if already exists in the output directory
+    # REQUIREMENT CHECK: Overwrite without asking.
+    # Removed the "if os.path.exists return" check.
 
-    # --- NEW BITRATE CHECK LOGIC ---
+    # --- BITRATE CHECK ---
     try:
-        target_bitrate_str = codec_settings.get('bitrate', '0k')
+        target_bitrate_str = str(codec_settings.get('bitrate', '0k'))
         target_bitrate_kbps = int(target_bitrate_str.lower().replace('k', ''))
     except (ValueError, AttributeError):
         target_bitrate_kbps = 0
 
     source_bitrate_kbps = get_bitrate(file_path)
 
-    # Condition to check if conversion is necessary
     should_convert = (
         source_bitrate_kbps == 0 or 
         target_bitrate_kbps == 0 or 
@@ -181,23 +182,26 @@ def process_video(file_path, settings):
     )
 
     if not should_convert:
-        # If no conversion is needed, just move the file and log it
+        # Just move the file (overwrite if needed)
         try:
+            if os.path.exists(output_path):
+                os.remove(output_path) # Ensure we can move
             os.rename(file_path, output_path)
             timestamp = datetime.datetime.now().strftime('%H:%M:%S')
-            log_message(f"{timestamp} > {os.path.basename(file_path)} > Skipped (Moved)")
+            # REQUIREMENT CHECK: Specific log format
+            log_message(f"{timestamp} > {os.path.basename(file_path)} > Skipped")
         except OSError:
-            # Silently fail if move is not possible
             pass
-        return # Stop processing this file
+        return 
 
-    # --- IF CONVERSION IS NEEDED, PROCEED AS BEFORE ---
+    # --- CONVERSION ---
     base_cmd = ["ffmpeg", "-y", "-i", file_path]
     video_opts = ["-c:v", video_codec]
     audio_opts = ["-c:a", audio_codec]
     
     if 'crf' in codec_settings: video_opts.extend(["-crf", str(codec_settings['crf'])])
     else: video_opts.extend(["-b:v", codec_settings.get('bitrate', '2500k')])
+    
     if 'preset' in codec_settings: video_opts.extend(["-preset", str(codec_settings['preset'])])
     if 'cpu_use' in codec_settings: video_opts.extend(["-cpu-used", str(codec_settings['cpu_use'])])
     if codec_settings.get('row') == 1: video_opts.extend(["-row-mt", "1"])
@@ -211,7 +215,9 @@ def process_video(file_path, settings):
     else:
         audio_opts.extend(["-b:a", audio_settings.get('bitrate', '192k')])
 
+    success = False
     if s_user.get('two_pass', False):
+        # Two-pass logic
         video_opts_pass2 = ["-c:v", video_codec, "-b:v", codec_settings.get('bitrate', '2500k')]
         if 'preset' in codec_settings: video_opts_pass2.extend(["-preset", str(codec_settings['preset'])])
         
@@ -225,6 +231,7 @@ def process_video(file_path, settings):
             try: os.remove(log_file)
             except OSError: pass
     else:
+        # One-pass logic
         cmd = base_cmd + video_opts + audio_opts + [output_path]
         success = run_command(cmd)
 
@@ -250,11 +257,11 @@ def is_in_schedule(start_float, end_float):
     else: # Day schedule
         return start_float <= current_hour_float < end_float
 
-
 def main():
-    """The main loop of the converter script."""
+    """The main loop."""
     while True:
         try:
+            # Load settings every loop to allow live updates
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 settings = json.load(f)
             
@@ -265,10 +272,10 @@ def main():
                 time.sleep(s_sched['sleep'])
                 continue
 
-            # Create output directory if it doesn't exist
+            # Create output directory
             os.makedirs(s_user['output_dir'], exist_ok=True)
             
-            # Find files to process
+            # Find files
             files_to_process = []
             allowed_exts = tuple(f".{ext}" for ext in s_user['files'])
             image_exts = ('.jpg', '.jpeg', '.heic')
@@ -282,8 +289,10 @@ def main():
             if files_to_process:
                 log_message(f"<<<<< {len(files_to_process)} files found, starting conversion >>>>>")
                 for file_path in files_to_process:
-                    # Reload settings periodically or pass them? 
-                    # Currently we use the settings loaded at start of this loop iteration
+                    # Check if file still exists (in case user deleted it while script was running)
+                    if not os.path.exists(file_path):
+                        continue
+                        
                     if file_path.lower().endswith(image_exts):
                         process_image(file_path, settings)
                     else:
@@ -292,18 +301,17 @@ def main():
             time.sleep(s_sched['sleep'])
 
         except FileNotFoundError:
-            # Silently wait if settings.json is not found
-            time.sleep(300)
+            print(f"Waiting for {SETTINGS_FILE}...")
+            time.sleep(60)
         except json.JSONDecodeError:
             log_message(f"Error: {SETTINGS_FILE} contains invalid JSON.")
-            time.sleep(300)
+            time.sleep(60)
         except KeyboardInterrupt:
             print("\nConverter stopped by user.")
             break
         except Exception as e:
-            # Catch all other errors to prevent script from crashing
             log_message(f"Critical Error: {str(e)}")
-            time.sleep(300)
+            time.sleep(60)
 
 if __name__ == "__main__":
     main()
