@@ -46,6 +46,6 @@ fi
 echo "--------------------------------------"
 echo "Installation/Update complete."
 echo "The compressor will start automatically the next time you reboot your device."
-echo "To modify settings, edit the file: '~/compress-media-android/config.yaml'"
+echo "To modify settings, edit the file: '~/compress-media-android/settings.yaml'"
 echo "To uninstall, run the script: '~/compress-media-android/uninstall.sh'"
 echo "--------------------------------------"
