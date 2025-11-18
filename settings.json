@@ -1,0 +1,56 @@
+{
+  "user_settings": {
+    "files": [
+      "mp4",
+      "avi",
+      "mov",
+      "jpg",
+      "jpeg",
+      "heic"
+    ],
+    "input_dir": [
+      "/storage/emulated/0/DCIM/Camera"
+    ],
+    "output_dir": "/storage/emulated/0/DCIM/Compressed",
+    "scheduling": {
+      "start_time": 22.5,
+      "end_time": 7.25,
+      "sleep": 60
+    },
+    "image": "avif",
+    "video": "libsvtav1",
+    "two_pass": false,
+    "audio": "opus"
+  },
+  "codecs": {
+    "libsvtav1": {
+      "crf": 25,
+      "bitrate": "2500k",
+      "preset": 8
+    },
+    "libaom-av1": {
+      "crf": 25,
+      "bitrate": "2500k",
+      "cpu_use": 5,
+      "row": 1,
+      "threads": 8
+    },
+    "h265": {
+      "crf": 28,
+      "bitrate": "4000k",
+      "preset": "medium"
+    },
+    "jpeg": {
+      "quality": 4,
+      "huffman": "optimal"
+    },
+    "aac": {
+      "bitrate": "192k",
+      "quality": 1.5
+    },
+    "opus": {
+      "bitrate": "96k",
+      "vbr": "on"
+    }
+  }
+}
