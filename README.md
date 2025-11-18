@@ -38,32 +38,41 @@ You can customize the script's behavior by editing the settings file.
 2.  Make your desired changes. The file is commented to explain each option.
 3.  Save the file and exit by pressing `Ctrl+X`, then `Y`, then `Enter`.
 
-The script will automatically apply your new settings on its next cycle (within 5 minutes by default). You only need to restart your phone if you want the changes to apply immediately or if you have just installed the script for the first time.
+The script will automatically apply your new settings on its next cycle (within 5 minutes). You only need to restart your phone if you want the changes to apply immediately or if you have just installed the script for the first time.
 
-### Configuration Options
+### **Configuration**
 
-*   `input_dir`: A list of folders to scan for new media.
-*   `output_dir`: The folder where compressed files will be saved.
-*   `delete_original`: Set to `yes` to delete original files after processing, or `no` to keep them.
+#### **Core Settings**
+*   `input_dir`: Folders to scan for media.
+*   `output_dir`: Where to save converted files.
+*   `files`: File extensions to process (e.g., `mp4`, `jpg`).
 
-#### Video Settings
-*   `video_codec`: Choose `h265` (default, great compatibility) or `av1` (better compression but extremely slow).
-*   `audio_codec`: Choose `aac` (default, best compatibility) or `opus` (more efficient, great quality at lower bitrates).
-*   `video_bitrate`: The target bitrate for video files in kbps.
-*   `audio_bitrate`: The target bitrate for audio. **Tip:** If using `opus`, a value of `128` is often excellent.
-*   `two_pass_encoding`: Set to `yes` for potentially higher quality video at the cost of much longer processing time.
+#### **General Conversion Choices**
+*   `image`: Output format (`avif` or `jpg`).
+*   `video`: Video codec (`libsvtav1`, `libaom-av1`, `h265`).
+*   `audio`: Audio codec (`opus` or `aac`).
+*   `two_pass`: `true` for better quality at the cost of double the time.
 
-#### Image Settings
-*   `image_format`: The output format for images.
-    *   `jpg`: (Default) Fast and universally compatible.
-    *   `avif`: Modern format. Provides files ~3 times smaller than JPG with no visible quality loss, but takes **~20 times longer** to process.
-*   `quality`: Sets the compression level. **The meaning of this value depends on the `image_format` you choose!**
-    *   For `jpg`: A value from `2` (best quality) to `31` (worst quality). A value of `7` is a good balance.
-    *   For `avif`: A value from `0` (lossless) to `63` (worst quality). A value of `30` is a good balance.
+#### **Codec Parameters (Fine-Tuning)**
 
-#### Scheduling Settings
-*   `time_from` / `time_to`: The time window during which the script is allowed to run (e.g., only at night).
-*   `sleep_duration`: How many seconds the script waits between checking for new files.
+**Quality & Bitrate**
+*   `crf`: The main **quality** setting for video. **Lower is better.**
+*   `bitrate`: Alternative to `crf`. Sets a target file size (kbps).
+*   `quality`:
+    *   **Images**: `jpg` (`2`-best to `31`-worst) / `avif` (`0`-best to `63`-worst).
+    *   **AAC Audio**: VBR quality (`~0.1` to `2`). **Higher is better.**
+*   `vbr` (Opus): `on` or `off` to enable Variable Bit Rate.
+
+**Speed & Performance**
+*   `preset` (h265/libsvtav1): Speed vs. compression.
+    *   **h265**: `medium` to `ultrafast`.
+    *   **libsvtav1**: `0` (slowest) to `13` (fastest).
+*   `cpu_use` (libaom-av1): `0` (slowest/best) to `8` (fastest/worst).
+*   `row` / `threads` (libaom-av1): Toggles multithreading for better CPU usage.
+*   `huffman` (jpg): `optimal` for slightly smaller file size.
+
+#### **Scheduling**
+*   `start_time` / `end_time`: Active hours for the script (e.g., `22.5` to `7.25`).
 
 ## 5. Verifying and Monitoring
 *   **After rebooting**, you can check that the compressor is running in the background with this command in Termux:
