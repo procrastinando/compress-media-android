@@ -12,47 +12,50 @@
       "/storage/emulated/0/DCIM/Camera"
     ],
     "output_dir": "/storage/emulated/0/DCIM/Compressed",
+    "verbose": false,
     "scheduling": {
       "start_time": 22.5,
       "end_time": 7.25,
-      "sleep": 300
+      "sleep": 60
     },
     "image": "avif",
     "video": "libsvtav1",
     "two_pass": false,
-    "audio": "opus"
+    "audio": "libopus"
   },
   "codecs": {
     "libsvtav1": {
-      "crf": 25,
+      "crf": 30,
       "bitrate": "2500k",
       "preset": 8
     },
     "libaom-av1": {
-      "crf": 25,
+      "crf": 30,
       "bitrate": "2500k",
       "cpu_use": 5,
       "row": 1,
       "threads": 8
     },
-    "h265": {
+    "libx265": {
       "crf": 28,
       "bitrate": "4000k",
       "preset": "medium"
     },
-    "jpeg": {
-      "quality": 4,
-      "huffman": "optimal"
+    "libopus": {
+      "bitrate": "96k",
+      "vbr": "on"
     },
     "aac": {
       "bitrate": "192k",
       "quality": 1.5
     },
-    "opus": {
-      "bitrate": "96k",
-      "vbr": "on"
+    "avif": {
+      "quality": 30,
+      "cpu_use": 8
+    },
+    "jpeg": {
+      "quality": 4,
+      "huffman": "optimal"
     }
   }
 }
-
-
