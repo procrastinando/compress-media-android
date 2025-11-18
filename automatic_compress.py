@@ -2,10 +2,11 @@ import os
 import time
 import datetime
 import subprocess
-import yaml
+import json
 import glob
 
 LOG_FILE = "logs.txt"
+SETTINGS_FILE = "settings.json"
 
 # --- Core Helper Functions ---
 
@@ -195,7 +196,6 @@ def process_video(file_path, settings):
     video_opts = ["-c:v", video_codec]
     audio_opts = ["-c:a", audio_codec]
     
-    # ... (The rest of the command building logic is the same as the previous "Upgraded Version") ...
     if 'crf' in codec_settings: video_opts.extend(["-crf", str(codec_settings['crf'])])
     else: video_opts.extend(["-b:v", codec_settings.get('bitrate', '2500k')])
     if 'preset' in codec_settings: video_opts.extend(["-preset", str(codec_settings['preset'])])
@@ -255,8 +255,8 @@ def main():
     """The main loop of the converter script."""
     while True:
         try:
-            with open("settings.yaml", "r") as f:
-                settings = yaml.safe_load(f)
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                settings = json.load(f)
             
             s_user = settings['user_settings']
             s_sched = s_user['scheduling']
@@ -282,6 +282,8 @@ def main():
             if files_to_process:
                 log_message(f"<<<<< {len(files_to_process)} files found, starting conversion >>>>>")
                 for file_path in files_to_process:
+                    # Reload settings periodically or pass them? 
+                    # Currently we use the settings loaded at start of this loop iteration
                     if file_path.lower().endswith(image_exts):
                         process_image(file_path, settings)
                     else:
@@ -290,13 +292,17 @@ def main():
             time.sleep(s_sched['sleep'])
 
         except FileNotFoundError:
-            # Silently wait if settings.yaml is not found
+            # Silently wait if settings.json is not found
+            time.sleep(300)
+        except json.JSONDecodeError:
+            log_message(f"Error: {SETTINGS_FILE} contains invalid JSON.")
             time.sleep(300)
         except KeyboardInterrupt:
             print("\nConverter stopped by user.")
             break
-        except Exception:
+        except Exception as e:
             # Catch all other errors to prevent script from crashing
+            log_message(f"Critical Error: {str(e)}")
             time.sleep(300)
 
 if __name__ == "__main__":
