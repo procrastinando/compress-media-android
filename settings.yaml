@@ -1,0 +1,43 @@
+user_settings:
+  files:
+    - mp4
+    - avi
+    - mov
+    - jpg
+    - jpeg
+    - heic
+  input_dir: # does not consider subdirectories
+    - /storage/emulated/0/DCIM/Camera
+    # - /path/to/other/dir
+  output_dir: /storage/emulated/0/DCIM/Compressed
+  scheduling:
+    start_time: 22.5 # 10:30 PM
+    end_time: 7.25 # 7:15 AM
+  image: avif # jpg, avif
+  video: libsvtav1 # libsvtav1, libaom-av1, h265
+  two_pass: false # true, false (recommended for libaom-av1)
+  audio: opus # aac, opus
+codecs:
+  libsvtav1: # faster av1
+    crf: 25 # 0-63 (lower is better quality)
+    bitrate: 2500k
+    preset: 8 # 0-13 (13 fastest)
+  libaom-av1: # av1 with more quality
+    crf: 25 # 0-63 (lower is better quality)
+    bitrate: 2500k
+    cpu_use: 5 # 0-8 (8 more use)
+    row: 1 # enable multithreading
+    threads: 8
+  h265:
+    crf: 28 # 0-51 (lower is better quality)
+    bitrate: 4000k
+    preset: medium # ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow, placebo
+  jpeg:
+    quality: 4 # 1-31 (lower is better quality)
+    huffman: optimal # default, optimal
+  aac:
+    bitrate: 192k # e.g., 128k, 192k, 256k
+    quality: 1.5 # ~0.1-2 (higher is better quality)
+  opus:
+    bitrate: 96k # e.g., 64k, 96k, 128k
+    vbr: on # on, off, constrained
