@@ -29,11 +29,11 @@ curl -L https://raw.githubusercontent.com/procrastinando/compress-media-android/
 ```
 
 ## 4. Configuration
-You can customize the script's behavior by editing the configuration file.
+You can customize the script's behavior by editing the settings file.
 
-1.  Open the config file in a text editor:
+1.  Open the settings file in a text editor:
     ```bash
-    nano ~/compress-media-android/config.yaml
+    nano ~/compress-media-android/settings.yaml
     ```
 2.  Make your desired changes. The file is commented to explain each option.
 3.  Save the file and exit by pressing `Ctrl+X`, then `Y`, then `Enter`.
