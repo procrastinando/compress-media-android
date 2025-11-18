@@ -1,438 +1,303 @@
-import subprocess
 import os
-import re
 import time
-import shutil
+import datetime
+import subprocess
+import yaml
 import glob
-from datetime import datetime
-import traceback
 
-# --- Global Log File Path ---
-LOG_FILE_PATH = ""
+LOG_FILE = "logs.txt"
 
-# --- Default configuration values ---
-DEFAULT_INPUT_DIRS = ["/storage/emulated/0/DCIM/Camera"]
-DEFAULT_OUTPUT_DIR = "/storage/emulated/0/DCIM/Compressed"
-DEFAULT_VIDEO_BITRATE = 3000
-DEFAULT_AUDIO_BITRATE = 192
-DEFAULT_JPG_QUALITY = 7     # For JPG (lower is better, 2-31)
-DEFAULT_AVIF_QUALITY = 30    # For AVIF (higher is worse, 0-63)
-DEFAULT_IMAGE_FORMAT = "jpg" # Options: jpg, avif
-DEFAULT_AUDIO_CODEC = "aac"  # Options: aac, opus
-DEFAULT_VIDEO_CODEC = "h265" # Options: h265, av1
-DEFAULT_TIME_FROM = 23.5
-DEFAULT_TIME_TO = 7.25
-DEFAULT_SLEEP_DURATION = 300
-DEFAULT_DELETE_ORIGINAL = "yes"
-DEFAULT_TWO_PASS_ENCODING = "yes"
-
-# --- Status constants for file processing ---
-STATUS_COMPLETED = "Completed"
-STATUS_MOVED = "Skipped (Moved)"
-STATUS_COPIED = "Skipped (Copied)"
-STATUS_FAILED = "Failed"
-STATUS_SKIPPED_EXISTS = "Skipped (Exists)" # If output already exists
-
-def setup_logging(script_dir):
-    global LOG_FILE_PATH
-    LOG_FILE_PATH = os.path.join(script_dir, "logs.txt")
-    log_message(f"Logging initialized. Log file: {LOG_FILE_PATH}")
+# --- Core Helper Functions ---
 
 def log_message(message):
-    global LOG_FILE_PATH
-    if not LOG_FILE_PATH:
-        print(f"ERROR: LOG_FILE_PATH not set. Message: {message}")
-        return
+    """Appends a message to the global log file."""
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(message + "\n")
 
-    # Check if the message is one of the new multi-line formats
-    if message.startswith("> Conversion time:"):
-        log_entry = f"{message}\n" # Don't add a timestamp to the second line
-    else:
-        # Check for the custom timestamp format
-        # This regex looks for a pattern like "mm-dd hh:mm: filename"
-        if re.match(r"^\d{2}-\d{2}\s\d{2}:\d{2}:", message):
-             log_entry = f"{message}\n"
-        else: # Fallback to the old timestamped format for system messages
-            now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            log_entry = f"[{now_str}] {message}\n"
-
+def run_command(command):
+    """Runs a command, captures output, and returns True on success."""
     try:
-        with open(LOG_FILE_PATH, 'a', encoding='utf-8') as f:
-            f.write(log_entry)
-    except Exception:
-        if not hasattr(log_message, "logging_error_reported"):
-            print(f"CRITICAL LOGGING ERROR: Could not write to {LOG_FILE_PATH}. Further logs lost.", file=os.sys.stderr)
-            log_message.logging_error_reported = True
-        pass
-
-def read_config_yaml(config_path):
-    config = {}
-    reading_input_dirs = False
-    try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if line.startswith("input_dir:"):
-                    config["input_dir"] = []
-                    reading_input_dirs = True
-                    continue
-                if reading_input_dirs:
-                    if line.startswith("- "):
-                        item = line[1:].strip()
-                        if item: config["input_dir"].append(item)
-                        continue
-                    else:
-                        reading_input_dirs = False
-                if ":" in line:
-                    key, value = line.split(":", 1)
-                    config[key.strip()] = value.strip()
-    except FileNotFoundError:
-        log_message(f"Info: Config file '{config_path}' not found. Using default values.")
-        return {}
-    except Exception as e:
-        log_message(f"Error reading config '{config_path}': {e}. Using default values.")
-        return {}
-    return config
-
-def safe_int(value, default):
-    try: return int(value)
-    except: return default
-
-def safe_float(value, default):
-    try: return float(value)
-    except: return default
-
-def get_video_bitrate(file_path):
-    """Returns bitrate in kbps, 0 if not found/error, -1 if ffprobe missing."""
-    try:
-        result = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=bit_rate", "-of", "default=noprint_wrappers=1:nokey=1",
-             file_path],
-            capture_output=True, text=True, check=True, encoding='utf-8', errors='ignore'
+        subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='ignore'
         )
-        bitrate_str = result.stdout.strip()
-        if bitrate_str == "N/A" or not bitrate_str: return 0
-        return int(bitrate_str) / 1000
-    except ValueError: return 0
-    except subprocess.CalledProcessError: return 0
-    except FileNotFoundError:
-        log_message(f"Error: 'ffprobe' (part of FFmpeg) not found. Cannot determine video bitrates.")
-        return -1
-    except Exception: return 0
+        backup_file = command[-1] + "_original"
+        if os.path.exists(backup_file):
+            os.remove(backup_file)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
 
 def get_video_duration(file_path):
-    """Returns video duration in seconds, 0.0 if not found/error."""
+    """Returns video duration in seconds using ffprobe."""
+    command = [
+        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1", file_path
+    ]
     try:
-        result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", file_path],
-            capture_output=True, text=True, check=True, encoding='utf-8', errors='ignore'
-        )
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
         return float(result.stdout.strip())
-    except (ValueError, subprocess.CalledProcessError, FileNotFoundError):
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
         return 0.0
-
-def _run_command(command_list, operation_name, filename):
-    """Helper to run subprocess and handle common errors, returns True on success."""
+    
+def get_bitrate(file_path):
+    """
+    Returns the overall bitrate of a video file in kbps.
+    Returns 0 if bitrate cannot be determined.
+    """
+    command = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=bit_rate",
+        "-of", "default=noprint_wrappers=1:nokey=1", file_path
+    ]
     try:
-        subprocess.run(command_list, check=True, capture_output=True, text=True, encoding='utf-8', errors='ignore')
-        return True
-    except subprocess.CalledProcessError as e:
-        error_detail = e.stderr.strip().splitlines()[-1] if e.stderr and e.stderr.strip() else "No error detail"
-        log_message(f"  Debug: {operation_name} for '{filename}' failed. CMD: {' '.join(command_list)}. Error: {error_detail}")
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        bitrate_bps_str = result.stdout.strip()
+        if bitrate_bps_str and bitrate_bps_str.lower() != 'n/a':
+            return int(bitrate_bps_str) / 1000  # Convert bps to kbps
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+        return 0
+    return 0
+
+# --- Ultimate Metadata Transfer Functions ---
+
+def transfer_image_metadata(source_file, dest_file):
+    """Transfers all metadata and correctly resets orientation."""
+    copy_cmd = [
+        "exiftool", "-m", "-TagsFromFile", source_file,
+        "-all:all", "-unsafe", "-overwrite_original", dest_file
+    ]
+    if not run_command(copy_cmd):
         return False
-    except FileNotFoundError:
-        tool_name = command_list[0]
-        log_message(f"Error: Command '{tool_name}' not found. Please ensure it's installed and in PATH.")
-        if tool_name == "ffmpeg" and not hasattr(_run_command, "ffmpeg_missing_reported"):
-            _run_command.ffmpeg_missing_reported = True
-        elif tool_name == "exiftool" and not hasattr(_run_command, "exiftool_missing_reported"):
-            _run_command.exiftool_missing_reported = True
+
+    orient_cmd = [
+        "exiftool", "-m", "-Orientation=1", "-n",
+        "-overwrite_original", dest_file
+    ]
+    if not run_command(orient_cmd):
         return False
-    except Exception as e:
-        log_message(f"  Debug: Unexpected error during {operation_name} for '{filename}': {e}")
-        return False
+    
+    return True
 
-def cleanup_pass_logs():
-    for log_file in glob.glob("ffmpeg2pass-*.log") + glob.glob("ffmpeg2pass-*.log.mbtree"):
-        try:
-            os.remove(log_file)
-        except OSError:
-            pass
+def transfer_video_metadata(source_file, dest_file):
+    """Performs a robust metadata transfer for video files."""
+    copy_cmd = [
+        "exiftool", "-m", "-TagsFromFile", source_file,
+        "-all:all", "-unsafe", "-overwrite_original", dest_file
+    ]
+    return run_command(copy_cmd)
 
-def process_video_file(input_file, output_file, video_b_cfg, audio_b_cfg, current_bitrate_kbps, two_pass_cfg, delete_original_cfg, video_codec_cfg, audio_codec_cfg):
-    """
-    Processes a video file using CPU-based (software) encoding for maximum compatibility.
-    Returns (STATUS_STRING, error_message_or_None, conversion_duration_or_None).
-    """
-    filename = os.path.basename(input_file)
-    should_compress = current_bitrate_kbps == 0 or current_bitrate_kbps > (video_b_cfg * 1.1)
+# --- Main Processing Logic ---
 
-    ffmpeg_audio_codec = "libopus" if audio_codec_cfg == "opus" else "aac"
+def process_image(file_path, settings):
+    """Orchestrates the conversion and metadata transfer for an image."""
+    start_process_time = time.time()
+    
+    s_user = settings['user_settings']
+    s_codecs = settings['codecs']
+    
+    output_dir = s_user['output_dir']
+    image_format = s_user['image']
+    codec_settings = s_codecs.get(image_format, {})
 
-    if should_compress:
-        start_time = time.time()
-        # --- CPU-ONLY ENCODING LOGIC ---
-        if video_codec_cfg == "av1":
-            ffmpeg_video_codec = "libaom-av1"
-            encoder_type = "Software (CPU)"
-            extra_pass_args = ["-cpu-used", "8"]
-            final_args = []
-        else:
-            ffmpeg_video_codec = "libx265"
-            encoder_type = "Software (CPU)"
-            extra_pass_args = []
-            final_args = ["-tag:v", "hvc1"]
+    base_name = os.path.splitext(os.path.basename(file_path))[0]
+    output_path = os.path.join(output_dir, f"{base_name}.{image_format}")
+    
+    if os.path.exists(output_path):
+        return # Skip if already converted
 
-        encoding_successful = False
-        last_error = "Unknown encoding error"
+    # Build ffmpeg command
+    if image_format == 'avif':
+        cmd = [
+            "ffmpeg", "-y", "-i", file_path,
+            "-c:v", "libaom-av1",
+            "-crf", str(codec_settings.get('quality', 30)),
+            "-cpu-used", str(codec_settings.get('cpu_use', 4)),
+            output_path
+        ]
+    elif image_format == 'jpg':
+        cmd = [
+            "ffmpeg", "-y", "-i", file_path,
+            "-q:v", str(codec_settings.get('quality', 4)),
+            "-huffman", codec_settings.get('huffman', 'optimal'),
+            output_path
+        ]
+    else:
+        return # Unsupported image format
 
-        # No print here, logging is handled in main loop
-        
-        try:
-            if two_pass_cfg:
-                pass1_cmd = ["ffmpeg", "-y", "-i", input_file, "-c:v", ffmpeg_video_codec, "-b:v", f"{video_b_cfg}k", *extra_pass_args, "-pass", "1", "-an", "-f", "null", "/dev/null"]
-                if not _run_command(pass1_cmd, f"Video compression ({ffmpeg_video_codec} Pass 1)", filename):
-                    last_error = f"Software encoding failed (Pass 1 - {ffmpeg_video_codec})"
-                else:
-                    pass2_cmd = ["ffmpeg", "-i", input_file, "-map_metadata", "0", "-movflags", "+use_metadata_tags", "-c:v", ffmpeg_video_codec, "-b:v", f"{video_b_cfg}k", *extra_pass_args, "-pass", "2", "-c:a", ffmpeg_audio_codec, "-b:a", f"{audio_b_cfg}k", *final_args, output_file]
-                    if _run_command(pass2_cmd, f"Video compression ({ffmpeg_video_codec} Pass 2)", filename):
-                        encoding_successful = True
-                    else:
-                        last_error = f"Software encoding failed (Pass 2 - {ffmpeg_video_codec})"
-                        if os.path.exists(output_file): os.remove(output_file)
-            else:
-                ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_file, "-map_metadata", "0", "-movflags", "+use_metadata_tags", "-c:v", ffmpeg_video_codec, "-b:v", f"{video_b_cfg}k", *extra_pass_args, "-c:a", ffmpeg_audio_codec, "-b:a", f"{audio_b_cfg}k", *final_args, output_file]
-                if _run_command(ffmpeg_cmd, f"Video compression ({ffmpeg_video_codec})", filename):
-                    encoding_successful = True
-                else:
-                    last_error = f"Software encoding failed (Single Pass - {ffmpeg_video_codec})"
-                    if os.path.exists(output_file): os.remove(output_file)
-        finally:
-            cleanup_pass_logs()
-
-        if not encoding_successful:
-            return STATUS_FAILED, f"Compression error: Encoding failed. Last error: {last_error}", None
-
-        exiftool_cmd = ["exiftool", "-m", "-TagsFromFile", input_file, "-all:all>all:all", "-unsafe", "-overwrite_original", output_file]
-        if not _run_command(exiftool_cmd, "Metadata copy (video)", filename):
-            if os.path.exists(output_file): os.remove(output_file)
-            return STATUS_FAILED, "Metadata copy error", None
-
-        if delete_original_cfg:
+    # Execute conversion, metadata transfer, and cleanup
+    if run_command(cmd):
+        if transfer_image_metadata(file_path, output_path):
             try:
-                os.remove(input_file)
-            except OSError as e:
-                return STATUS_FAILED, f"Error removing original: {e}", None
-        
-        end_time = time.time()
-        return STATUS_COMPLETED, None, end_time - start_time
+                os.remove(file_path)
+                duration = time.time() - start_process_time
+                timestamp = datetime.datetime.now().strftime('%H:%M:%S')
+                log_message(f"{timestamp} > {os.path.basename(output_path)} > {duration:.2f}s")
+            except OSError:
+                pass # Failed to delete, but conversion was successful
+
+def process_video(file_path, settings):
+    """
+    Orchestrates video processing with new bitrate check logic.
+    Converts only if the source bitrate is significantly higher than the target.
+    Otherwise, it moves the original file.
+    """
+    start_process_time = time.time()
+
+    s_user = settings['user_settings']
+    s_codecs = settings['codecs']
     
-    else:
-        try:
-            if delete_original_cfg:
-                os.rename(input_file, output_file)
-                return STATUS_MOVED, None, None
-            else:
-                shutil.copy2(input_file, output_file)
-                return STATUS_COPIED, None, None
-        except (OSError, shutil.Error) as e:
-            return STATUS_FAILED, f"Error moving/copying file: {e}", None
+    output_dir = s_user['output_dir']
+    video_codec = s_user['video']
+    audio_codec = s_user['audio']
+    codec_settings = s_codecs.get(video_codec, {})
+    audio_settings = s_codecs.get(audio_codec, {})
 
-def process_image_file(input_file, output_file, quality_cfg, delete_original_cfg, image_format_cfg):
-    """Processes an image file. Returns (STATUS_STRING, error_message_or_None)."""
-    filename = os.path.basename(input_file)
-    base, ext = os.path.splitext(output_file)
-    temp_output_image = f"{base}_temp_{os.getpid()}{ext}"
+    base_name = os.path.splitext(os.path.basename(file_path))[0]
+    output_path = os.path.join(output_dir, f"{base_name}.mp4")
 
-    if image_format_cfg == "avif":
-        ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_file, "-c:v", "libaom-av1", "-crf", str(quality_cfg), "-cpu-used", "4", temp_output_image]
-    else:
-        ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_file, "-q:v", str(quality_cfg), "-f", "image2", temp_output_image]
+    if os.path.exists(output_path):
+        return # Skip if already exists in the output directory
 
-    if not _run_command(ffmpeg_cmd, f"Image compression ({image_format_cfg})", filename):
-        if os.path.exists(temp_output_image): os.remove(temp_output_image)
-        return STATUS_FAILED, "Compression error"
-
-    exiftool_cmd = ["exiftool", "-m", "-TagsFromFile", input_file, "-all:all>all:all", "--Orientation", "-unsafe", "-overwrite_original", temp_output_image]
-    if not _run_command(exiftool_cmd, "Metadata copy (image)", filename):
-        if os.path.exists(temp_output_image): os.remove(temp_output_image)
-        return STATUS_FAILED, "Metadata copy error"
-
-    reset_orientation_cmd = ["exiftool", "-Orientation=1", "-n", "-overwrite_original", temp_output_image]
-    if not _run_command(reset_orientation_cmd, "Reset orientation tag", filename):
-        if os.path.exists(temp_output_image): os.remove(temp_output_image)
-        return STATUS_FAILED, "Orientation reset error"
-
+    # --- NEW BITRATE CHECK LOGIC ---
     try:
-        os.replace(temp_output_image, output_file)
-    except OSError as e:
-        if os.path.exists(temp_output_image): os.remove(temp_output_image)
-        return STATUS_FAILED, f"Error finalizing image: {e}"
+        target_bitrate_str = codec_settings.get('bitrate', '0k')
+        target_bitrate_kbps = int(target_bitrate_str.lower().replace('k', ''))
+    except (ValueError, AttributeError):
+        target_bitrate_kbps = 0
 
-    if delete_original_cfg:
+    source_bitrate_kbps = get_bitrate(file_path)
+
+    # Condition to check if conversion is necessary
+    should_convert = (
+        source_bitrate_kbps == 0 or 
+        target_bitrate_kbps == 0 or 
+        source_bitrate_kbps > (target_bitrate_kbps * 1.1)
+    )
+
+    if not should_convert:
+        # If no conversion is needed, just move the file and log it
         try:
-            os.remove(input_file)
-        except OSError as e:
-            return STATUS_FAILED, f"Error removing original: {e}"
-    
-    return STATUS_COMPLETED, None
+            os.rename(file_path, output_path)
+            timestamp = datetime.datetime.now().strftime('%H:%M:%S')
+            log_message(f"{timestamp} > {os.path.basename(file_path)} > Skipped (Moved)")
+        except OSError:
+            # Silently fail if move is not possible
+            pass
+        return # Stop processing this file
 
-if __name__ == "__main__":
-    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-    setup_logging(SCRIPT_DIR)
-    CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.yaml")
-
-    log_message("Script started.")
+    # --- IF CONVERSION IS NEEDED, PROCEED AS BEFORE ---
+    base_cmd = ["ffmpeg", "-y", "-i", file_path]
+    video_opts = ["-c:v", video_codec]
+    audio_opts = ["-c:a", audio_codec]
     
+    # ... (The rest of the command building logic is the same as the previous "Upgraded Version") ...
+    if 'crf' in codec_settings: video_opts.extend(["-crf", str(codec_settings['crf'])])
+    else: video_opts.extend(["-b:v", codec_settings.get('bitrate', '2500k')])
+    if 'preset' in codec_settings: video_opts.extend(["-preset", str(codec_settings['preset'])])
+    if 'cpu_use' in codec_settings: video_opts.extend(["-cpu-used", str(codec_settings['cpu_use'])])
+    if codec_settings.get('row') == 1: video_opts.extend(["-row-mt", "1"])
+    if 'threads' in codec_settings: video_opts.extend(["-threads", str(codec_settings['threads'])])
+
+    if audio_codec == 'aac' and 'quality' in audio_settings:
+        audio_opts.extend(["-q:a", str(audio_settings['quality'])])
+    elif audio_codec == 'opus' and 'vbr' in audio_settings:
+        audio_opts.extend(["-vbr", audio_settings['vbr']])
+        audio_opts.extend(["-b:a", audio_settings.get('bitrate', '96k')])
+    else:
+        audio_opts.extend(["-b:a", audio_settings.get('bitrate', '192k')])
+
+    if s_user.get('two_pass', False):
+        video_opts_pass2 = ["-c:v", video_codec, "-b:v", codec_settings.get('bitrate', '2500k')]
+        if 'preset' in codec_settings: video_opts_pass2.extend(["-preset", str(codec_settings['preset'])])
+        
+        pass1_log_file = f"ffmpeg2pass-{os.getpid()}"
+        pass1_cmd = base_cmd + video_opts + ["-pass", "1", "-passlogfile", pass1_log_file, "-an", "-f", "null", os.devnull]
+        pass2_cmd = base_cmd + video_opts_pass2 + audio_opts + ["-pass", "2", "-passlogfile", pass1_log_file, output_path]
+
+        success = run_command(pass1_cmd) and run_command(pass2_cmd)
+        
+        for log_file in glob.glob(f"{pass1_log_file}*"):
+            try: os.remove(log_file)
+            except OSError: pass
+    else:
+        cmd = base_cmd + video_opts + audio_opts + [output_path]
+        success = run_command(cmd)
+
+    if success:
+        if transfer_video_metadata(file_path, output_path):
+            try:
+                os.remove(file_path)
+                total_duration = time.time() - start_process_time
+                video_length = get_video_duration(output_path)
+                time_per_sec = total_duration / video_length if video_length > 0 else 0
+                timestamp = datetime.datetime.now().strftime('%H:%M:%S')
+                log_message(f"{timestamp} > {os.path.basename(output_path)} > {time_per_sec:.2f}s / {total_duration:.2f}s")
+            except OSError:
+                pass
+
+def is_in_schedule(start_float, end_float):
+    """Checks if the current time is within the scheduled window."""
+    now = datetime.datetime.now()
+    current_hour_float = now.hour + now.minute / 60.0
+    
+    if start_float > end_float: # Overnight schedule
+        return current_hour_float >= start_float or current_hour_float < end_float
+    else: # Day schedule
+        return start_float <= current_hour_float < end_float
+
+
+def main():
+    """The main loop of the converter script."""
     while True:
         try:
-            _run_command.ffmpeg_missing_reported = False
-            _run_command.exiftool_missing_reported = False
-            ffprobe_globally_missing = False
-
-            raw_config = read_config_yaml(CONFIG_PATH)
-            input_dirs_cfg = raw_config.get("input_dir", DEFAULT_INPUT_DIRS)
-            if not isinstance(input_dirs_cfg, list) or not input_dirs_cfg:
-                input_dirs_cfg = DEFAULT_INPUT_DIRS
-            output_dir_cfg = raw_config.get("output_dir", DEFAULT_OUTPUT_DIR)
-            video_b_cfg = safe_int(raw_config.get("video_bitrate"), DEFAULT_VIDEO_BITRATE)
-            audio_b_cfg = safe_int(raw_config.get("audio_bitrate"), DEFAULT_AUDIO_BITRATE)
-            time_from_cfg = safe_float(raw_config.get("time_from"), DEFAULT_TIME_FROM)
-            time_to_cfg = safe_float(raw_config.get("time_to"), DEFAULT_TIME_TO)
-            sleep_duration_cfg = safe_int(raw_config.get("sleep_duration"), DEFAULT_SLEEP_DURATION)
-            delete_original_cfg = raw_config.get("delete_original", DEFAULT_DELETE_ORIGINAL).lower() == 'yes'
-            two_pass_cfg = raw_config.get("two_pass_encoding", DEFAULT_TWO_PASS_ENCODING).lower() == 'yes'
+            with open("settings.yaml", "r") as f:
+                settings = yaml.safe_load(f)
             
-            video_codec_cfg = raw_config.get("video_codec", DEFAULT_VIDEO_CODEC).lower()
-            if video_codec_cfg not in ["h265", "av1"]: video_codec_cfg = DEFAULT_VIDEO_CODEC
+            s_user = settings['user_settings']
+            s_sched = s_user['scheduling']
             
-            audio_codec_cfg = raw_config.get("audio_codec", DEFAULT_AUDIO_CODEC).lower()
-            if audio_codec_cfg not in ["aac", "opus"]: audio_codec_cfg = DEFAULT_AUDIO_CODEC
-            
-            image_format_cfg = raw_config.get("image_format", DEFAULT_IMAGE_FORMAT).lower()
-            if image_format_cfg not in ["jpg", "avif"]: image_format_cfg = DEFAULT_IMAGE_FORMAT
-            
-            default_q = DEFAULT_AVIF_QUALITY if image_format_cfg == 'avif' else DEFAULT_JPG_QUALITY
-            image_q_cfg = safe_int(raw_config.get("quality"), default_q)
-
-            now = datetime.now()
-            current_hour_float = now.hour + now.minute / 60.0
-            is_time_allowed = (time_from_cfg <= current_hour_float < time_to_cfg) if time_from_cfg < time_to_cfg else (current_hour_float >= time_from_cfg or current_hour_float < time_to_cfg)
-
-            if not is_time_allowed:
-                # SILENTLY sleep when outside the allowed window
-                time.sleep(sleep_duration_cfg)
+            if not is_in_schedule(s_sched['start_time'], s_sched['end_time']):
+                time.sleep(s_sched['sleep'])
                 continue
 
-            # Standard system logs can still be useful
-            log_message(f"Within processing window. Scanning for files...")
-            try:
-                os.makedirs(output_dir_cfg, exist_ok=True)
-            except OSError as e:
-                log_message(f"CRITICAL: Could not create output directory '{output_dir_cfg}': {e}. Skipping cycle.")
-                time.sleep(sleep_duration_cfg)
-                continue
-
+            # Create output directory if it doesn't exist
+            os.makedirs(s_user['output_dir'], exist_ok=True)
+            
+            # Find files to process
             files_to_process = []
-            for current_input_dir in input_dirs_cfg:
-                if not os.path.isdir(current_input_dir):
-                    log_message(f"Warning: Input directory '{current_input_dir}' not found. Skipping.")
-                    continue
-                try:
-                    for filename in os.listdir(current_input_dir):
-                        if filename.startswith("."): continue
-                        input_path = os.path.join(current_input_dir, filename)
-                        if os.path.isfile(input_path):
-                            files_to_process.append(input_path)
-                except OSError as e:
-                    log_message(f"Error listing files in '{current_input_dir}': {e}")
+            allowed_exts = tuple(f".{ext}" for ext in s_user['files'])
+            image_exts = ('.jpg', '.jpeg', '.heic')
 
+            for in_dir in s_user['input_dir']:
+                if os.path.isdir(in_dir):
+                    for filename in os.listdir(in_dir):
+                        if filename.lower().endswith(allowed_exts):
+                            files_to_process.append(os.path.join(in_dir, filename))
+            
             if files_to_process:
-                for input_path in files_to_process:
-                    filename = os.path.basename(input_path)
-                    
-                    try:
-                        status, error_msg = STATUS_FAILED, "Unknown processing error"
-                        lower_filename = filename.lower()
-                        
-                        output_filename = filename
-                        if lower_filename.endswith((".jpg", ".jpeg")):
-                            base, _ = os.path.splitext(filename)
-                            output_filename = f"{base}.{image_format_cfg}"
-                        output_path = os.path.join(output_dir_cfg, output_filename)
+                log_message(f"<<<<< {len(files_to_process)} files found, starting conversion >>>>>")
+                for file_path in files_to_process:
+                    if file_path.lower().endswith(image_exts):
+                        process_image(file_path, settings)
+                    else:
+                        process_video(file_path, settings)
 
-                        # --- LOGGING FOR SKIPPED FILES (Still useful) ---
-                        if os.path.exists(output_path):
-                            log_message(f"Skipped '{filename}' (output already exists).")
-                            if delete_original_cfg:
-                                try:
-                                    os.remove(input_path)
-                                except OSError as e:
-                                    log_message(f"  Warning: Could not remove original '{filename}': {e}")
-                            continue
+            time.sleep(s_sched['sleep'])
 
-                        # --- PROCESS AND LOG IMAGES ---
-                        if lower_filename.endswith((".jpg", ".jpeg")):
-                            status, error_msg = process_image_file(input_path, output_path, image_q_cfg, delete_original_cfg, image_format_cfg)
-
-                        # --- PROCESS AND LOG VIDEOS ---
-                        elif lower_filename.endswith(".mp4"):
-                            conv_duration = None
-                            if ffprobe_globally_missing:
-                                status, error_msg = STATUS_FAILED, "ffprobe missing"
-                            else:
-                                current_br_kbps = get_video_bitrate(input_path)
-                                if current_br_kbps == -1:
-                                    ffprobe_globally_missing = True
-                                    status, error_msg = STATUS_FAILED, "ffprobe missing"
-                                else:
-                                    # The function now returns conversion duration
-                                    status, error_msg, conv_duration = process_video_file(input_path, output_path, video_b_cfg, audio_b_cfg, current_br_kbps, two_pass_cfg, delete_original_cfg, video_codec_cfg, audio_codec_cfg)
-                            
-                            # --- NEW LOGIC FOR SUCCESSFUL VIDEO CONVERSION ---
-                            if status == STATUS_COMPLETED and conv_duration is not None:
-                                video_duration_secs = get_video_duration(output_path) # Check output file for accurate duration
-                                if video_duration_secs > 0:
-                                    ratio = conv_duration / video_duration_secs
-                                    timestamp = datetime.now().strftime('%m-%d %H:%M')
-                                    log_message(f"{timestamp}: {filename}")
-                                    log_message(f"> Conversion time: {conv_duration:.0f} seconds (ratio: {ratio:.3f})")
-                                continue # Skip the generic logging below
-                        
-                        else: # --- Handle other file types ---
-                            try:
-                                if delete_original_cfg:
-                                    os.rename(input_path, output_path)
-                                    status = "Moved (Unsupported type)"
-                                else:
-                                    shutil.copy2(input_path, output_path)
-                                    status = "Copied (Unsupported type)"
-                                error_msg = None
-                            except (OSError, shutil.Error) as e:
-                                status, error_msg = STATUS_FAILED, f"Move/Copy failed: {e}"
-
-                        # --- GENERIC LOGGING FOR ALL OTHER CASES (errors, moves, copies, images) ---
-                        if status != STATUS_COMPLETED:
-                             if error_msg: log_message(f"{status} '{filename}' (Reason: {error_msg})")
-                             else: log_message(f"{status} '{filename}'")
-
-                    except Exception as e_proc:
-                        log_message(f"FAILED '{filename}' (Unexpected error: {e_proc})")
-                        log_message(traceback.format_exc())
-
-            log_message(f"Processing cycle finished. Sleeping for {sleep_duration_cfg} seconds...")
-            time.sleep(sleep_duration_cfg)
-
+        except FileNotFoundError:
+            # Silently wait if settings.yaml is not found
+            time.sleep(300)
         except KeyboardInterrupt:
-            log_message("Script interrupted by user. Exiting.")
+            print("\nConverter stopped by user.")
             break
-        except Exception as e_main:
-            log_message(f"--- UNEXPECTED CRITICAL ERROR IN MAIN LOOP ---")
-            log_message(f"Error: {e_main}")
-            log_message(traceback.format_exc())
-            log_message(f"Sleeping for {DEFAULT_SLEEP_DURATION}s before retrying.")
-            time.sleep(DEFAULT_SLEEP_DURATION)
+        except Exception:
+            # Catch all other errors to prevent script from crashing
+            time.sleep(300)
+
+if __name__ == "__main__":
+    main()
