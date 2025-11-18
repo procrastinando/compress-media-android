@@ -14,8 +14,7 @@
     "output_dir": "/storage/emulated/0/DCIM/Compressed",
     "scheduling": {
       "start_time": 22.5,
-      "end_time": 7.25,
-      "sleep": 60
+      "end_time": 7.25
     },
     "image": "avif",
     "video": "libsvtav1",
@@ -54,3 +53,4 @@
     }
   }
 }
+
