@@ -3,6 +3,7 @@ pkg update
 
 echo "Installing dependencies..."
 pkg install python ffmpeg exiftool git nano -y
+pip install PyYAML
 
 # Navigate to home directory to ensure we clone in the right place
 cd ~
