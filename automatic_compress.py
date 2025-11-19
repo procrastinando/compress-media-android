@@ -82,9 +82,13 @@ def get_bitrate(file_path):
 # --- Ultimate Metadata Transfer Functions ---
 
 def transfer_image_metadata(source_file, dest_file, verbose=False):
+    # We add --ThumbnailImage and --PreviewImage to EXCLUDE them from the copy
     copy_cmd = [
         "exiftool", "-m", "-TagsFromFile", source_file,
-        "-all:all", "-unsafe", "-overwrite_original", dest_file
+        "-all:all", 
+        "--ThumbnailImage",  # <--- ADD THIS: Do not copy the old thumbnail
+        "--PreviewImage",    # <--- ADD THIS: Do not copy the old preview
+        "-unsafe", "-overwrite_original", dest_file
     ]
     if not run_command(copy_cmd, verbose):
         return False
@@ -305,3 +309,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
